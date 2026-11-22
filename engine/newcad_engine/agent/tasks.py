@@ -324,12 +324,13 @@ class BotManager:
             if t.status == "failed":
                 raise StoreError(res.problem or "The interview step failed")
             spec = p.read_yaml("spec.yaml") or {}
-            open_ids = {q["id"] for q in S.open_questions(spec)}
+            open_list = [q["id"] for q in S.open_questions(spec)]
+            open_ids = set(open_list)
             qid = asked.get("question_id")
             if qid and qid not in open_ids:  # model picked an answered or unknown id: take the first open one
-                qid = next(iter(open_ids), None)
+                qid = open_list[0] if open_list else None
             if not asked and open_ids:
-                qid = next(iter(open_ids))
+                qid = open_list[0]
             done = qid is None
             msg = asked.get("message") or ("That's everything I need." if done else "")
             if msg:

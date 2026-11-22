@@ -1,11 +1,14 @@
 // 3D view for How? and Check, built with react-three-fiber.
-// Geometry is the stub assembly from model/parts.ts; the engine will stream GLB instead.
+// With an engine the model comes from its GLB builds (EngineAssembly); without one it is
+// the stub assembly from model/parts.ts.
 import { Canvas, useFrame, useThree, type ThreeEvent } from '@react-three/fiber';
 import { Edges, OrbitControls, OrthographicCamera } from '@react-three/drei';
 import { useEffect, useMemo, useRef, type ComponentRef, type ReactNode } from 'react';
 import * as THREE from 'three';
 import { bodyBounds, buildModel, heat, massProps, modelBounds, MODEL_Y_OFFSET, rotorAxis, stressAt, type Model, type Part, type Primitive, type Vec3 } from '../../model/parts';
 import { useApp, type CameraView } from '../../state/store';
+import { engineParts, viewBounds } from '../../engine/model';
+import { EngineAssembly, explodeOffset } from './EngineAssembly';
 
 const BLUE = new THREE.Color('#1D4ED8');
 const ORANGE = new THREE.Color('#D9480F');
@@ -64,11 +67,19 @@ function Labels() {
   const analysis = useApp((s) => s.analysis);
   const hovered = useApp((s) => s.hovered);
   const selected = useApp((s) => s.selected);
+  const eng = useApp((s) => s.eng);
   const model = buildModel(version);
-  const exOf = (id: string) => (model.parts.find((x) => x.id === id)?.ex ?? [0, 0, 0]).map((k) => k * explode * 70);
-  const mp = analysis === 'cg' && layer === 'how' ? massProps(model) : null;
-  const hov = hovered ? model.parts.find((p) => p.id === hovered) : undefined;
-  const hovAt: Vec3 | null = hov ? (() => { const b = bodyBoundsOfPart(hov); return [(b.mn[0] + b.mx[0]) / 2, b.mx[1], (b.mn[2] + b.mx[2]) / 2]; })() : null;
+  const ep = engineParts({ eng, version });
+  const ebb = ep ? viewBounds({ eng, version }) : null;
+  const ecenter: Vec3 = ebb ? [(ebb.mn[0] + ebb.mx[0]) / 2, (ebb.mn[1] + ebb.mx[1]) / 2, (ebb.mn[2] + ebb.mx[2]) / 2] : [0, 0, 0];
+  // label targets for both the engine model and the stub
+  const items = ep
+    ? ep.map((p) => ({ id: p.id, name: p.name, mn: p.mn, mx: p.mx, ex: explodeOffset(p, ecenter, explode) }))
+    : model.parts.map((p) => { const b = bodyBoundsOfPart(p); return { id: p.id, name: p.name, mn: b.mn, mx: b.mx, ex: p.ex.map((k) => k * explode * 70) as Vec3 }; });
+  const exOf = (id: string) => items.find((x) => x.id === id)?.ex ?? [0, 0, 0];
+  const mp = analysis === 'cg' && layer === 'how' && !ep ? massProps(model) : null;
+  const hov = hovered ? items.find((p) => p.id === hovered) : undefined;
+  const hovAt: Vec3 | null = hov ? [(hov.mn[0] + hov.mx[0]) / 2, hov.mx[1], (hov.mn[2] + hov.mx[2]) / 2] : null;
 
   return (
     <>
@@ -89,9 +100,9 @@ function Labels() {
         </ScreenTag>
       )}
       {selected && (() => {
-        const p = model.parts.find((x) => x.id === selected);
+        const p = items.find((x) => x.id === selected);
         if (!p) return null;
-        const b = bodyBoundsOfPart(p), ex = exOf(p.id);
+        const b = p, ex = exOf(p.id);
         return (
           <ScreenTag id={`sel-${p.id}-${explode}`} at={[(b.mn[0] + b.mx[0]) / 2 + ex[0], b.mx[1] + ex[1], (b.mn[2] + b.mx[2]) / 2 + ex[2]]}>
             <span className="hovtag seltag" style={{ position: 'static', transform: 'translate(-50%, -140%)' }}>{p.name}</span>
@@ -110,6 +121,7 @@ function bodyBoundsOfPart(part: Part) {
 
 export function Viewport3D() {
   const settings = useApp((s) => s.settings);
+  const live = useApp((s) => !!s.eng?.manifest);
   return (
     <div className="viewport">
       <div className="stage3d truecol" role="img" aria-label="3D view of the selected concept. Drag to orbit, scroll to zoom.">
@@ -120,7 +132,7 @@ export function Viewport3D() {
           <directionalLight position={[-300, 700, 500]} intensity={1.6} />
           <directionalLight position={[400, 200, -300]} intensity={0.35} />
           {settings.grid ? <gridHelper args={[600, 24, '#d6d6d1', '#ecece8']} position={[0, MODEL_Y_OFFSET - 0.5, 0]} /> : null}
-          <Assembly />
+          {live ? <EngineAssembly /> : <Assembly />}
           <Projector />
         </Canvas>
         <Labels />
@@ -134,21 +146,27 @@ function CameraRig({ orbit }: { orbit: number }) {
   const size = useThree((s) => s.size);
   const cam = useRef<THREE.OrthographicCamera>(null);
   const controls = useRef<ComponentRef<typeof OrbitControls>>(null);
-  const fit = Math.min(size.width / 640, size.height / 460);
+  const eng = useApp((s) => s.eng);
+  const ebb = eng?.manifest ? viewBounds({ eng, version: 2 }) : null;
+  // the stub model is about 450 mm across; an engine model is framed by its own bounds
+  const span = ebb ? Math.max(60, ebb.mx[0] - ebb.mn[0], ebb.mx[1] - ebb.mn[1], ebb.mx[2] - ebb.mn[2]) : 0;
+  const fit = Math.min(size.width / 640, size.height / 460) * (ebb ? 260 / span : 1);
+  const target: Vec3 = ebb ? [(ebb.mn[0] + ebb.mx[0]) / 2, (ebb.mn[1] + ebb.mx[1]) / 2 + MODEL_Y_OFFSET, (ebb.mn[2] + ebb.mx[2]) / 2] : [0, 0, 0];
+  const frameKey = ebb ? `${eng?.pid}:${Math.round(span / 20)}` : 'stub';
 
   useEffect(() => {
     const c = cam.current;
     if (!c) return;
     const { az, el } = VIEWS[camera.view];
     const D = 1200;
-    c.position.set(D * Math.cos(el * D2R) * Math.sin(az * D2R), D * Math.sin(el * D2R), D * Math.cos(el * D2R) * Math.cos(az * D2R));
+    c.position.set(target[0] + D * Math.cos(el * D2R) * Math.sin(az * D2R), target[1] + D * Math.sin(el * D2R), target[2] + D * Math.cos(el * D2R) * Math.cos(az * D2R));
     c.zoom = fit;
-    c.lookAt(0, 0, 0);
+    c.lookAt(target[0], target[1], target[2]);
     c.updateProjectionMatrix();
-    controls.current?.target.set(0, 0, 0);
+    controls.current?.target.set(target[0], target[1], target[2]);
     controls.current?.update();
-    // only on an explicit view change, not on every resize
-  }, [camera.nonce]);
+    // only on an explicit view change or a new model size, not on every resize
+  }, [camera.nonce, frameKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   return (
     <>

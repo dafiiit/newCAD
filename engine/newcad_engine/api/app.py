@@ -73,6 +73,7 @@ class Answer(BaseModel):
     text: str
     replace: bool = False
     assumption: bool = False
+    index: int | None = None  # edit this answer in place instead of adding one
 
 
 class RemoveAnswer(BaseModel):
@@ -336,7 +337,16 @@ def create_app(engine: Engine | None = None) -> FastAPI:
 
     @app.post("/api/projects/{pid}/spec/answer")
     async def answer(pid: str, body: Answer) -> dict[str, Any]:
-        return spec_write(proj(pid), lambda s: S.answer(s, body.question_id, body.text, "you", body.assumption, body.replace), "Spec: answers")
+        def m(s: dict[str, Any]) -> Any:
+            if body.index is None:
+                return S.answer(s, body.question_id, body.text, "you", body.assumption, body.replace)
+            _, q = S.find_question(s, body.question_id)
+            answers = q.get("answers", [])
+            if not 0 <= body.index < len(answers) or not body.text.strip():
+                raise StoreError("No such answer")
+            answers[body.index] = {"text": body.text.strip(), "by": "you", "assumption": body.assumption}
+            return q
+        return spec_write(proj(pid), m, "Spec: answers")
 
     @app.post("/api/projects/{pid}/spec/answer/remove")
     async def remove_answer(pid: str, body: RemoveAnswer) -> dict[str, Any]:

@@ -30,6 +30,10 @@ def test_api_end_to_end(tmp_path):
         # spec answers and comments
         spec = c.post(f"/api/projects/{pid}/spec/answer", json={"question_id": "function-1", "text": "Carry 4 kg"}, headers=H).json()
         assert spec["categories"][0]["questions"][0]["answers"][0] == {"text": "Carry 4 kg", "by": "you", "assumption": False}
+        # editing an answer in place keeps its position
+        spec = c.post(f"/api/projects/{pid}/spec/answer", json={"question_id": "function-1", "text": "Carry 5 kg", "index": 0}, headers=H).json()
+        assert [a["text"] for a in spec["categories"][0]["questions"][0]["answers"]] == ["Carry 5 kg"]
+        assert c.post(f"/api/projects/{pid}/spec/answer", json={"question_id": "function-1", "text": "x", "index": 7}, headers=H).status_code == 400
         face = c.get(f"/api/cache/{man['parts'][0]['key']}/faces", headers=H).json()["faces"][0]
         note = c.post(f"/api/projects/{pid}/notes", json={"part": "plate", "text": "Chamfer", "face": face["tag"], "key": man["parts"][0]["key"]}, headers=H).json()
         assert note["face_sig"]["type"] == face["type"]

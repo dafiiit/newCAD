@@ -4,6 +4,16 @@ import { headCommit, useApp } from '../../state/store';
 import { ModelThumb } from '../../model/ModelThumb';
 import { PlaceholderCube, PlusIcon } from '../../components/icons';
 import { cx, Segmented } from '../../components/ui';
+import { assetUrl } from '../../engine/client';
+import { openProject } from '../../engine/sync';
+
+function ago(t: number) {
+  const d = Date.now() / 1000 - t;
+  if (d < 90) return 'just now';
+  if (d < 3600) return `${Math.round(d / 60)} min ago`;
+  if (d < 86400) return `${Math.round(d / 3600)} h ago`;
+  return `${Math.round(d / 86400)} days ago`;
+}
 
 const FILTERS = ['All', 'Robotics', 'Energy', 'Fixtures', '3D printing'] as const;
 
@@ -15,26 +25,37 @@ export function HomeScreen() {
   const head = headCommit(s);
   const mock = (name: string) => () => s.showToast(`${name} is an example card. Only Generator mount is built in this prototype.`);
   const newProject = () => { s.set({ chatOpen: true, chatText: 'New project: ' }); };
-  const projects = [
+  const live = s.eng?.projects;
+  const projects = live ? live.slice().sort((a, b) => b.updated - a.updated).map((p) => ({
+    name: p.name,
+    meta: `Edited ${ago(p.updated)} · ${p.branches.length} branch${p.branches.length === 1 ? '' : 'es'} · ${p.parts.length} part${p.parts.length === 1 ? '' : 's'}`,
+    phase: p.parts.length ? 'How?' : 'What?',
+    thumb: false,
+    img: p.parts.length ? assetUrl(`/api/projects/${p.id}/snapshot.png?w=360&h=240&ref=${p.headCommit}`) : null,
+    open: () => {
+      if (p.id === s.eng?.pid) { s.go(s.lastLayer === 'home' ? 'what' : s.lastLayer); return; }
+      openProject(p.id).then(() => useApp.getState().go(p.parts.length ? 'how' : 'what')).catch((e) => s.showToast(String(e.message ?? e)));
+    },
+  })) : [
     ...s.remixed.map((id) => { const c = COMMUNITY.find((x) => x.id === id)!; return { name: `Remix of ${c.name}`, meta: `Just now · from ${c.author}`, phase: 'What?', thumb: false, open: mock(`Remix of ${c.name}`) }; }),
     { name: s.projectName, meta: `Edited just now · ${head ? `${head.branch} · ${head.id}` : ''} · ${Object.keys(s.branchColors).length} branches`, phase: phaseOf(s.lastLayer), thumb: true, open: () => s.go(s.lastLayer) },
     { name: 'Sensor bracket', meta: 'Edited 2 days ago · 1 branch', phase: 'What?', thumb: false, open: mock('Sensor bracket') },
     { name: 'Gripper finger', meta: 'Edited last week · 4 branches', phase: 'How?', thumb: false, open: mock('Gripper finger') },
     { name: 'Pump housing cover', meta: 'Edited 3 weeks ago · 2 branches', phase: 'How?', thumb: false, open: mock('Pump housing cover') },
-  ];
+  ].map((p) => ({ ...p, img: null as string | null }));
   const community = COMMUNITY.filter((c) => s.commFilter === 'All' || c.tag === s.commFilter);
 
   return (
     <main className="home" aria-label="Projects">
       <div className="homehead">
-        <div><h1>Projects</h1><p className="muted">Pick up where you left off, or describe something new to Bot.</p></div>
+        <div><h1>Projects</h1><p className="muted">Pick up where you left off, or describe something new to Bot.{s.eng && <> <span className="engbadge"><span className={cx('dot', !s.eng.online && 'off')} />{s.eng.online ? 'Engine connected' : 'Engine offline'}</span></>}</p></div>
         <button className="pillbtn dark" onClick={newProject}><PlusIcon size={14} width={2.4} />New project</button>
       </div>
       <div className="pgrid">
         {projects.map((p) => (
           <button key={p.name} className="pcard" onClick={p.open}>
             <div className="pthumb">
-              {p.thumb ? <ModelThumb version={s.version} /> : <span className="pph"><PlaceholderCube /></span>}
+              {p.img ? <img className="histthumb" alt="" src={p.img} /> : p.thumb ? <ModelThumb version={s.version} /> : <span className="pph"><PlaceholderCube /></span>}
               <span className={cx('phase', p.phase === 'How?' && 'how')}>{p.phase}</span>
             </div>
             <div className="pinfo"><b>{p.name}</b><span className="muted">{p.meta}</span></div>

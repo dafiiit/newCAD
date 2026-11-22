@@ -38,7 +38,7 @@ def engine_main(argv: list[str] | None = None) -> None:
     cfg.write_runtime(port)
     # one machine-readable line so the Tauri shell (or a script) can pick up port and token
     print(f"NEWCAD_ENGINE url=http://{args.host}:{port} token={cfg.token}", flush=True)
-    uvicorn.run(create_app(engine), host=args.host, port=port, log_level="warning", ws="websockets")
+    uvicorn.run(create_app(engine), host=args.host, port=port, log_level="warning", ws="websockets-sansio")
 
 
 def mcp_main(argv: list[str] | None = None) -> None:

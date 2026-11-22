@@ -72,6 +72,8 @@ export function ProjectTitle() {
   const name = useApp((s) => s.projectName);
   const version = useApp((s) => s.version);
   const head = useApp((s) => headCommit(s));
+  const headBranch = useApp((s) => s.eng?.log?.headBranch);
+  const building = useApp((s) => !!s.eng?.building);
   const set = useApp((s) => s.set);
   const [draft, setDraft] = useState<string | null>(null);
   const save = () => { if (draft !== null) set({ projectName: draft.trim() || name }); setDraft(null); };
@@ -89,7 +91,7 @@ export function ProjectTitle() {
       )}
       <button className="pillbtn" title="Versions and branches" onClick={() => set({ review: true, selCommit: head?.id ?? '9b11', menu: null })}>
         <BranchIcon size={16} />
-        {head ? `${head.branch} · ${head.id}` : PROPS[version].name}
+        {head ? `${headBranch ?? head.branch} · ${head.id}${building ? ' · building' : ''}` : PROPS[version].name}
         <ChevronDown size={12} color="#111" width={2.4} />
       </button>
     </div>

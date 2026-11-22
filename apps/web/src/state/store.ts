@@ -1,10 +1,12 @@
-// App state for the prototype. Everything here is client-side mock behaviour;
-// the engine (REST + WS) replaces the timers and canned Bot replies later.
+// App state. Without an engine everything here is client-side mock behaviour.
+// When an engine answers, engine/sync.ts loads the project into this store and
+// swaps the mock actions for ones that call the engine (REST + WebSocket).
 import { create } from 'zustand';
 import {
   AHEAD_STAGES, BRANCH_COLORS, CATS, CHAT_SEED, EXTRA_COLORS, FOLLOWUPS, FOLLOWUPS_GEN, MORE_QS, MORE_QS_GEN,
   OVERVIEW_FACTS, OVERVIEW_SEED, PROPS, QINFO, QINFO_GEN, SEED_COMMITS, SETTINGS_DEF, STUDIES,
 } from '../data/seed';
+import type { EngineState } from '../engine/types';
 import type { Card, CardType, Category, ChatMessage, ChatThread, Commit, FollowUp, Layer, Member, Pin, QuestionInfo, Version } from '../data/types';
 
 export type Menu = null | 'account' | 'more' | 'cube' | 'mate' | 'export' | 'analysis' | 'view';
@@ -103,6 +105,11 @@ export interface AppState {
   asmPick: boolean;
   feedbackOpen: boolean;
 
+  // engine (null = mock mode)
+  eng: EngineState | null;
+  /** Engine mode: suggestions and default assumption per question key. */
+  qInfo: Record<string, QuestionInfo | FollowUp>;
+
   // pages
   settings: Settings;
   members: Member[];
@@ -139,7 +146,7 @@ export interface AppActions {
   checkout: (id: string) => void;
   addCommit: (opts: { msg: string; diff?: string; who?: string; branch?: string; ver?: Version; from?: string }) => Commit;
   runStudy: (id: string) => void;
-  addPin: (part: string, p: [number, number, number]) => void;
+  addPin: (part: string, p: [number, number, number], extra?: { face?: string | null; key?: string | null }) => void;
   sendPinComment: (id: number, text: string, queue: boolean) => void;
 }
 
@@ -190,7 +197,8 @@ function initialCards(): Record<string, Card[]> {
 const withOrig = (c: Category): Cat => ({ ...c, orig: c.qs.map((_, j) => j) });
 
 /** Question info (suggestions and the assumption Bot makes) for 'cat:i' and follow-up keys 'cat:i:f0'. */
-export function infoOf(s: Pick<AppState, 'cats' | 'fups'>, key: string): QuestionInfo | FollowUp | null {
+export function infoOf(s: Pick<AppState, 'cats' | 'fups'> & Partial<Pick<AppState, 'qInfo'>>, key: string): QuestionInfo | FollowUp | null {
+  if (s.qInfo && s.qInfo[key]) return s.qInfo[key];
   const a = key.split(':');
   if (a.length > 2) return s.fups[`${a[0]}:${a[1]}`]?.[Number(a[2].slice(1))] ?? null;
   const c = s.cats.find((x) => x.id === a[0]);
@@ -319,6 +327,9 @@ export const useApp = create<Store>()((set, get) => ({
   libOpen: false,
   asmPick: false,
   feedbackOpen: false,
+
+  eng: null,
+  qInfo: {},
 
   settings: defaultSettings(),
   members: [
@@ -619,7 +630,7 @@ export const useApp = create<Store>()((set, get) => ({
 
 // ---------- interview flow (module-private) ----------
 
-function askIv() {
+export function askIv() {
   const s = useApp.getState();
   const iv = s.iv;
   if (!iv) return;

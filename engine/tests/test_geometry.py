@@ -91,7 +91,7 @@ async def test_export_measure_and_snapshot(engine):
     assert png[:8] == b"\x89PNG\r\n\x1a\n" and man["ok"]
 
 
-def test_face_tags_are_stable_and_rematch_moved_faces():
+async def test_face_tags_are_stable_and_rematch_moved_faces():
     a = {"type": "plane", "area": 200.0, "center": [0.0, 0.0, 10.0], "normal": [0.0, 0.0, 1.0]}
     b = {"type": "plane", "area": 200.0, "center": [0.0, 0.0, 0.0], "normal": [0.0, 0.0, -1.0]}
     assert tag_of(dict(a)) == tag_of(a)
