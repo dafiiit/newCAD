@@ -1,0 +1,10 @@
+{
+  "name": "newcad",
+  "private": true,
+  "packageManager": "pnpm@10.28.0",
+  "scripts": {
+    "dev": "pnpm --filter @newcad/web dev",
+    "build": "pnpm --filter @newcad/web build",
+    "typecheck": "pnpm --filter @newcad/web typecheck"
+  }
+}
