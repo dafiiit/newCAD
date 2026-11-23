@@ -127,6 +127,14 @@ class Engine:
         self.events = EventBus()
         self.settings = Settings(self.cfg)
         self.store.listeners.append(self._on_store)
+        from .jobs.manager import JobManager
+        from .jobs.targets import LocalTarget, TargetRegistry
+        from .jobs.worker_service import WorkerService
+        from .sim.service import SimService
+        self.targets = TargetRegistry(self.cfg.home / "targets.json", LocalTarget(timeout_s=self.cfg.sim_timeout_s))
+        self.jobs = JobManager(self.cfg.cache_dir, self.cfg.home / "jobs", self.targets, self.events.publish)
+        self.sim = SimService(self)
+        self.worker = WorkerService(self.cfg.home / "worker", self.targets.local)
         self._watch: asyncio.Task[None] | None = None
         self._ref_seen: dict[str, str] = {}
         from .agent.tasks import BotManager  # late import: agent depends on core
@@ -169,6 +177,8 @@ class Engine:
         if self._watch:
             self._watch.cancel()
         await self.bot.cancel_all()
+        await self.jobs.close()
+        await self.worker.close()
         await self.pool.close()
 
     def project(self, pid: str):

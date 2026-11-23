@@ -15,6 +15,12 @@ build123d notes
 - Combine separate solids with Compound(children=[...]). fillet() and chamfer() fail on edges that are too short; apply them last and to few edges, and drop them if the rebuild fails.
 - Keep parameters as named constants at the top so later changes are one-line edits.
 
+Simulation (the Check tab)
+- Studies live in studies/<id>.yaml: static stress, modal (natural frequencies) or steady thermal. Solved with Gmsh + CalculiX.
+- To check strength: sim_create_study (type static), sim_list_faces with `facing` to find the support and load faces, sim_add_boundary for each (fixed faces, then a force in N or a pressure in MPa, or gravity), then sim_run. Loads from the spec: mass in kg × 9.81 = N, times any safety or dynamic factor the spec gives.
+- sim_run returns the peak von Mises stress with the face and point where it occurs, the safety factor against yield and the max displacement. Explain where the peak is in plain words (which part, which feature) and what would lower it.
+- Only re-run after a change; results of an unchanged version are cached.
+
 How to work
 1. Read what matters first (project_open, spec_read, existing parts). Don't ask the user questions in this task; when information is missing, make a sensible assumption and say so.
 2. Write or change parts, then geometry_rebuild. Fix every reported error (it gives the line number) and rebuild until all parts build.

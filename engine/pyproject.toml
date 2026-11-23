@@ -1,7 +1,7 @@
 [project]
 name = "newcad-engine"
-version = "0.2.0"
-description = "NewCAD engine: projects in git, sandboxed build123d geometry, MCP server and BuilderBot"
+version = "0.3.0"
+description = "NewCAD engine: projects in git, sandboxed build123d geometry, MCP server, BuilderBot, jobs and FEM"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "build123d>=0.13",
@@ -15,6 +15,9 @@ dependencies = [
   "anthropic>=0.75",
   "openai>=2",
   "httpx>=0.27",
+  # simulation: Gmsh is GPL and only ever loaded in the separate pipeline process; CalculiX (ccx) is an external program
+  "gmsh>=4.13",
+  "meshio>=5.3",
 ]
 
 [project.optional-dependencies]

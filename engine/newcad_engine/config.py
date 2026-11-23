@@ -29,6 +29,7 @@ class Config:
     workers: int = int(os.environ.get("NEWCAD_WORKERS", "3"))
     build_timeout_s: float = float(os.environ.get("NEWCAD_BUILD_TIMEOUT", "60"))
     build_memory_mb: int = int(os.environ.get("NEWCAD_BUILD_MEMORY_MB", "4096"))
+    sim_timeout_s: float = float(os.environ.get("NEWCAD_SIM_TIMEOUT", "3600"))
 
     @property
     def projects_dir(self) -> Path:
