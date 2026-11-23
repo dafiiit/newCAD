@@ -8,6 +8,7 @@ import { BRANCH_COLORS, EXTRA_COLORS } from '../data/seed';
 import type { Card, ChatMessage, Commit, FollowUp, Pin, QuestionInfo } from '../data/types';
 import { ivCurrent, openKeys, useApp, type AppActions, type AppState } from '../state/store';
 import { api, apiBlob, connectEvents, EngineError, probe, type EngineEvent } from './client';
+import { emptySim, loadStudies, onSimEvent, scheduleStudies } from './sim';
 import type {
   BotGroup, BotStatus, BotTask, EngineChatMessage, EngineLog, EngineNote, EngineState, Manifest, ProjectSummary, Spec,
 } from './types';
@@ -269,13 +270,15 @@ export async function openProject(id: string) {
   lastOverview = null;
   cardIds.clear();
   set({
-    projectName: p.name, eng: { ...eng()!, pid: id, projects, manifest: null, log: null, files: {}, tasks: {}, keyOf: {}, qidOf: {}, cardAns: {}, compare: {} },
+    projectName: p.name, eng: { ...eng()!, pid: id, projects, manifest: null, log: null, files: {}, tasks: {}, keyOf: {}, qidOf: {}, cardAns: {}, compare: {}, sim: emptySim() },
+    simSel: null, simPick: null, simProbe: null, simRange: null,
     iv: null, ahead: 0, agent: null, selected: null, pins: [], openPin: null, libParts: [], whatView: 'overview', typing: false,
     folders: [], floc: {}, cards: {}, ovFacts: [], ansDraft: {}, qMeta: {}, fups: {},
   });
   try { localStorage.setItem('newcad.project', id); } catch { /* private mode */ }
   await Promise.all([loadSpec(), loadLog(), loadNotes(), loadChat(), loadBotStatus()]);
   void loadModel();
+  void loadStudies().catch(() => undefined);
 }
 
 export async function refreshProjects() {
@@ -543,8 +546,10 @@ function onEvent(ev: EngineEvent) {
   if (ev.type === 'project.changed') {
     if (ev.project !== e.pid) { void refreshProjects().catch(() => undefined); return; }
     scheduleReload();
+    scheduleStudies();
     return;
   }
+  if (onSimEvent(ev)) return;
   if (ev.type === 'bot.task') { onTask(ev.task as BotTask); return; }
   if (ev.type === 'bot.message') {
     if (ev.project !== e.pid) return;
@@ -652,7 +657,7 @@ export async function startEngineSync() {
   const mock: AppActions = { ...get() };
   const state: EngineState = {
     online: true, pid: null, projects: [], manifest: null, building: false, log: null, files: {}, bot: null,
-    tasks: {}, keyOf: {}, qidOf: {}, cardAns: {}, compare: {},
+    tasks: {}, keyOf: {}, qidOf: {}, cardAns: {}, compare: {}, sim: emptySim(),
   };
   set({ eng: state, ...engineActions(mock) } as Partial<AppState>);
   connectEvents(onEvent, (up) => patchEng({ online: up }));

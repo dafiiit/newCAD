@@ -18,7 +18,7 @@ from ..config import density_of
 from ..project.store import Project, StoreError
 from .pool import WorkerPool
 
-GEOMETRY_VERSION = "1"
+GEOMETRY_VERSION = "2"  # 2: face signatures carry the centre of mass
 TOLERANCE = 0.1
 ANGULAR = 0.3
 

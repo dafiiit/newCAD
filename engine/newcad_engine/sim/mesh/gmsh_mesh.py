@@ -39,7 +39,7 @@ class Mesh:
     tet_part: np.ndarray                 # (e,) part index of each element
     parts: list[str]                     # part ids
     faces: dict[tuple[str, str], np.ndarray] = field(default_factory=dict)  # (part, tag) → (t, 3|6) node indices
-    exterior: dict[tuple[str, str], bool] = field(default_factory=dict)     # False for faces where two parts are bonded
+    outer: dict[tuple[str, str], np.ndarray] = field(default_factory=dict)  # the same, without the parts of faces bonded to another part
     quality: dict[str, Any] = field(default_factory=dict)
 
     @property
@@ -208,21 +208,23 @@ def _extract(gmsh: Any, parts: list[dict[str, Any]], vol_part: dict[int, int], b
         raise MeshError("Meshing produced no volume elements")
     T = np.concatenate(tets)
     faces: dict[tuple[str, str], np.ndarray] = {}
-    exterior: dict[tuple[str, str], bool] = {}
+    outer: dict[tuple[str, str], np.ndarray] = {}
     for key, ss in by_face.items():
-        tris = []
-        ext = True
+        tris, out = [], []
         for s in ss:
             up, _ = gmsh.model.getAdjacencies(2, s)
-            if len([u for u in up if u in vol_part]) > 1:
-                ext = False
+            bonded = len([u for u in up if u in vol_part]) > 1  # an interface between two parts
             types, _, enodes = gmsh.model.mesh.getElements(2, s)
             for t, en in zip(types, enodes):
                 if t in TRI_TYPES:
-                    tris.append(lookup[en.astype(np.int64)].reshape(-1, TRI_TYPES[t]))
+                    tri = lookup[en.astype(np.int64)].reshape(-1, TRI_TYPES[t])
+                    tris.append(tri)
+                    if not bonded:
+                        out.append(tri)
         if tris:
             faces[key] = np.concatenate(tris)
-            exterior[key] = ext
+        if out:
+            outer[key] = np.concatenate(out)
     q = gmsh.model.mesh.getElementQualities(np.concatenate(tet_tags), "minSICN")
     quality = {
         "nodes": int(len(nodes)), "elements": int(len(T)), "order": 2 if T.shape[1] == 10 else 1,
@@ -232,4 +234,4 @@ def _extract(gmsh: Any, parts: list[dict[str, Any]], vol_part: dict[int, int], b
     if quality["inverted_elements"]:
         raise MeshError(f"The mesh has {quality['inverted_elements']} inverted elements; try a smaller mesh size")
     return Mesh(nodes=nodes, tets=T, tet_part=np.concatenate(tet_part), parts=[p["id"] for p in parts], faces=faces,
-                exterior=exterior, quality=quality)
+                outer=outer, quality=quality)

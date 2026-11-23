@@ -1,0 +1,40 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  web:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+
+  engine:
+    # macOS joins once the Pixi environment (conda-forge calculix + gmsh) lands with packaging
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Solvers
+        run: |
+          sudo apt-get update
+          # CalculiX, plus the X/GL libraries the Gmsh wheel links against
+          sudo apt-get install -y --no-install-recommends calculix-ccx libglu1-mesa libxcursor1 libxinerama1 libxft2 libxrender1
+      - name: Engine tests
+        working-directory: engine
+        run: uv run --python 3.12 --extra dev pytest -q
+      - name: Validation (Phase 3 gate)
+        working-directory: engine
+        run: |
+          uv run --python 3.12 --extra dev python ../validation/report.py >> "$GITHUB_STEP_SUMMARY"
+          uv run --python 3.12 --extra dev pytest -q ../validation

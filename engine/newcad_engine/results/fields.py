@@ -55,9 +55,7 @@ def surface(mesh: Any) -> dict[str, Any]:
     opp = _opposite(mesh)
     pos, nodes_of, idx, fid, tags = [], [], [], [], []
     base = 0
-    for key, tris in sorted(mesh.faces.items()):
-        if not mesh.exterior.get(key, True):
-            continue
+    for key, tris in sorted(mesh.outer.items()):
         tris = _outward(mesh, tris, opp)
         lin = np.concatenate([tris[:, list(s)] for s in T6_SPLIT]) if tris.shape[1] == 6 else tris
         uniq, inv = np.unique(lin.reshape(-1), return_inverse=True)

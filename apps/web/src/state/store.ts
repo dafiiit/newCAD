@@ -6,7 +6,7 @@ import {
   AHEAD_STAGES, BRANCH_COLORS, CATS, CHAT_SEED, EXTRA_COLORS, FOLLOWUPS, FOLLOWUPS_GEN, MORE_QS, MORE_QS_GEN,
   OVERVIEW_FACTS, OVERVIEW_SEED, PROPS, QINFO, QINFO_GEN, SEED_COMMITS, SETTINGS_DEF, STUDIES,
 } from '../data/seed';
-import type { EngineState } from '../engine/types';
+import type { BoundaryType, EngineState } from '../engine/types';
 import type { Card, CardType, Category, ChatMessage, ChatThread, Commit, FollowUp, Layer, Member, Pin, QuestionInfo, Version } from '../data/types';
 
 export type Menu = null | 'account' | 'more' | 'cube' | 'mate' | 'export' | 'analysis' | 'view';
@@ -17,6 +17,9 @@ export type CutAxis = 'x' | 'y' | 'z';
 export type CameraView = 'iso' | 'front' | 'top' | 'side';
 
 interface Agent { label: string; step: number; total: number; pct: number }
+/** Faces being picked on the model for a new support or load (engine Check tab). */
+export interface SimPick { type: BoundaryType; faces: { part: string; tag: string; key: string | null }[]; vector: [number, number, number]; value: number | null; ambient: number | null; label: string }
+export interface SimProbe { value: number; unit: string; label: string; point: [number, number, number]; part: string | null; face: string | null }
 interface Interview { keys: string[]; i: number; answered: number; r1: number; fq: number }
 type Settings = Record<string, string | number | boolean>;
 type Cat = Category & { orig: (number | null)[] };
@@ -81,6 +84,13 @@ export interface AppState {
   mode: number;
   playing: boolean;
   rpm: number;
+  /** engine Check tab: selected study, face picking, probe, result display */
+  simSel: string | null;
+  simPick: SimPick | null;
+  simProbe: SimProbe | null;
+  simField: string | null;
+  simRange: [number, number] | null;
+  simDeform: number;
 
   // Bot chat
   chatOpen: boolean;
@@ -306,6 +316,12 @@ export const useApp = create<Store>()((set, get) => ({
   mode: 1,
   playing: true,
   rpm: 300,
+  simSel: null,
+  simPick: null,
+  simProbe: null,
+  simField: null,
+  simRange: null,
+  simDeform: 1,
 
   chatOpen: false,
   chatFull: false,

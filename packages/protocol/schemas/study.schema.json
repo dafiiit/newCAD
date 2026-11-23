@@ -1,0 +1,235 @@
+{
+  "$defs": {
+    "Boundary": {
+      "properties": {
+        "id": {
+          "default": "",
+          "title": "Id",
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "fixed",
+            "force",
+            "pressure",
+            "gravity",
+            "temperature",
+            "heat_flux",
+            "convection"
+          ],
+          "title": "Type",
+          "type": "string"
+        },
+        "label": {
+          "default": "",
+          "title": "Label",
+          "type": "string"
+        },
+        "faces": {
+          "items": {
+            "$ref": "#/$defs/FaceRef"
+          },
+          "title": "Faces",
+          "type": "array"
+        },
+        "vector": {
+          "anyOf": [
+            {
+              "items": {
+                "type": "number"
+              },
+              "type": "array"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "force: total force in N over all faces; gravity: acceleration in m/s²",
+          "title": "Vector"
+        },
+        "value": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "pressure MPa, temperature °C, heat_flux W total, convection W/(m²·K)",
+          "title": "Value"
+        },
+        "ambient": {
+          "anyOf": [
+            {
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "convection: ambient temperature in °C",
+          "title": "Ambient"
+        }
+      },
+      "required": [
+        "type"
+      ],
+      "title": "Boundary",
+      "type": "object"
+    },
+    "FaceRef": {
+      "properties": {
+        "part": {
+          "title": "Part",
+          "type": "string"
+        },
+        "tag": {
+          "title": "Tag",
+          "type": "string"
+        },
+        "sig": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Geometric signature of the face when it was picked",
+          "title": "Sig"
+        }
+      },
+      "required": [
+        "part",
+        "tag"
+      ],
+      "title": "FaceRef",
+      "type": "object"
+    },
+    "MeshSettings": {
+      "properties": {
+        "size": {
+          "anyOf": [
+            {
+              "exclusiveMinimum": 0,
+              "type": "number"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "Target element size in mm; empty = automatic",
+          "title": "Size"
+        },
+        "order": {
+          "default": 2,
+          "enum": [
+            1,
+            2
+          ],
+          "title": "Order",
+          "type": "integer"
+        }
+      },
+      "title": "MeshSettings",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "name": {
+      "title": "Name",
+      "type": "string"
+    },
+    "type": {
+      "default": "static",
+      "enum": [
+        "static",
+        "modal",
+        "thermal"
+      ],
+      "title": "Type",
+      "type": "string"
+    },
+    "parts": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Parts in the study; empty = the whole assembly (parts are bonded where they touch)",
+      "title": "Parts"
+    },
+    "materials": {
+      "additionalProperties": {
+        "type": "string"
+      },
+      "description": "Material per part id; default: the part's material",
+      "title": "Materials",
+      "type": "object"
+    },
+    "boundaries": {
+      "items": {
+        "$ref": "#/$defs/Boundary"
+      },
+      "title": "Boundaries",
+      "type": "array"
+    },
+    "mesh": {
+      "$ref": "#/$defs/MeshSettings"
+    },
+    "modes": {
+      "default": 6,
+      "maximum": 30,
+      "minimum": 1,
+      "title": "Modes",
+      "type": "integer"
+    },
+    "safety_target": {
+      "anyOf": [
+        {
+          "exclusiveMinimum": 0,
+          "type": "number"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Safety Target"
+    },
+    "target": {
+      "default": "auto",
+      "description": "Compute target id, or auto",
+      "title": "Target",
+      "type": "string"
+    }
+  },
+  "required": [
+    "id",
+    "name"
+  ],
+  "title": "Study",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://newcad.dev/schemas/study.schema.json",
+  "description": "A simulation study, stored as studies/<id>.yaml in the project repository. Units: mm, N, MPa, °C, W."
+}

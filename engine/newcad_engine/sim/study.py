@@ -29,7 +29,7 @@ ALLOWED: dict[str, set[str]] = {
 }
 NEEDS_FACES = {"fixed", "force", "pressure", "temperature", "heat_flux", "convection"}
 
-SIM_VERSION = "1"
+SIM_VERSION = "2"
 
 
 class FaceRef(BaseModel):
@@ -178,7 +178,7 @@ def resolve(study: Study, manifest: dict[str, Any], metas: dict[str, dict[str, A
         p = by[pid]
         mat = M.lookup(study.materials.get(pid) or p.get("material"))
         parts.append({"id": pid, "name": p.get("name", pid), "key": p["key"], "material": mat,
-                      "faces": [{"tag": f["tag"], "area": f["area"], "center": f["center"]} for f in metas[pid]["faces"]]})
+                      "faces": [{"tag": f["tag"], "area": f["area"], "center": f.get("com") or f["center"]} for f in metas[pid]["faces"]]})
     bb = manifest.get("bbox")
     size = study.mesh.size
     if size is None:

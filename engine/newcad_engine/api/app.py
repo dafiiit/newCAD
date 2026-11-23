@@ -178,6 +178,13 @@ class BoundaryBody(BaseModel):
     ambient: float | None = None
 
 
+class Measure(BaseModel):
+    kind: str
+    a: str
+    b: str
+    ref: str | None = None
+
+
 class RunStudy(BaseModel):
     ref: str | None = None
     priority: int = 0
@@ -541,6 +548,13 @@ def create_app(engine: Engine | None = None) -> FastAPI:
                 sig = next(({k: v for k, v in x.items() if k != "tag"} for x in meta["faces"] if x["tag"] == f.tag), None)
             out.append({"part": f.part, "tag": f.tag, "sig": sig})
         return out
+
+    @app.post("/api/projects/{pid}/measure")
+    async def measure(pid: str, body: Measure) -> dict[str, Any]:
+        """Exact OCCT checks between two parts (no solver): distance or clash with overlap volume."""
+        if body.kind not in ("distance", "clash"):
+            raise HTTPException(400, "kind must be distance or clash")
+        return await eng.geometry.measure(proj(pid), body.ref, body.kind, body.a, body.b)
 
     @app.get("/api/materials")
     async def materials() -> list[dict[str, Any]]:

@@ -3,6 +3,9 @@ import json
 
 import httpx
 import numpy as np
+import os
+import shutil
+
 import pytest
 from mcp import Client
 
@@ -15,7 +18,10 @@ from newcad_engine.project.store import YOU
 from newcad_engine.results.fields import read_field_glb
 from newcad_engine.sim import study as St
 
-pytestmark = pytest.mark.asyncio(loop_scope="module")
+pytestmark = [
+    pytest.mark.skipif(shutil.which(os.environ.get("NEWCAD_CCX") or "ccx") is None, reason="CalculiX (ccx) is not installed"),
+    pytest.mark.asyncio(loop_scope="module"),
+]
 
 BEAM = """from build123d import *
 L, B, H = 200, 20, 20
@@ -151,6 +157,9 @@ async def test_bonded_assembly_and_setup_problems(engine):
     job = await wait(engine, await engine.sim.run(p, st.id))
     assert job.status == "done", job.error
     assert job.summary["max_displacement_at"]["part"] == "post"
+    # the base's top face is partly bonded to the post: its free part is still drawn in the result
+    g = read_field_glb((engine.jobs.result_dir(job.key) / "field.glb").read_bytes())
+    assert f"base/{pick(bf, 2, 1)['tag']}" in g["extras"]["faceTags"]
     # the load face moved with a taller post: it is re-matched by its signature and the user is told
     p.commit("main", "Taller", YOU, changes={"parts/post.py": TOP.replace("30", "45")})
     prep = await engine.sim.prepare(p, st.id)

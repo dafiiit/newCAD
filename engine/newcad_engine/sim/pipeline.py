@@ -74,10 +74,9 @@ def run(job_dir: Path, out_dir: Path) -> dict[str, Any]:
     node_part = np.zeros(n, dtype=np.int64)
     node_part[mesh.tets.reshape(-1)] = np.repeat(mesh.tet_part, mesh.tets.shape[1])
     node_face: dict[int, tuple[str, str]] = {}
-    for key, tris in mesh.faces.items():
-        if mesh.exterior.get(key, True):
-            for nd in np.unique(tris):
-                node_face.setdefault(int(nd), key)
+    for key, tris in mesh.outer.items():
+        for nd in np.unique(tris):
+            node_face.setdefault(int(nd), key)
 
     surf = F.surface(mesh)
     scalars: dict[str, np.ndarray] = {}
@@ -110,7 +109,7 @@ def run(job_dir: Path, out_dir: Path) -> dict[str, Any]:
         scalars.update({"von_mises": vm, "safety": sf, "disp_mag": umag})
         vectors["disp"] = U
         fields_meta = {
-            "von_mises": {"label": "von Mises stress", "unit": "MPa", "min": float(vm[sn].min()), "max": float(vm[sn].max())},
+            "von_mises": {"label": "von Mises stress", "unit": "MPa", "min": 0.0, "max": float(vm[sn].max())},
             "safety": {"label": "Safety factor", "unit": "", "min": float(sf[sn].min()), "max": float(min(sf[sn].max(), 10.0))},
             "disp_mag": {"label": "Displacement", "unit": "mm", "min": 0.0, "max": float(umag[sn].max())},
         }

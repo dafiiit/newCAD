@@ -137,6 +137,126 @@ export interface BotStatus {
   [k: string]: unknown;
 }
 
+// ---------- simulation ----------
+
+export type StudyType = 'static' | 'modal' | 'thermal';
+export type BoundaryType = 'fixed' | 'force' | 'pressure' | 'gravity' | 'temperature' | 'heat_flux' | 'convection';
+
+export interface FaceRef { part: string; tag: string; sig?: Record<string, unknown> | null }
+export interface StudyBoundary {
+  id: string;
+  type: BoundaryType;
+  label?: string;
+  faces: FaceRef[];
+  vector?: [number, number, number];
+  value?: number;
+  ambient?: number;
+}
+
+export interface Where { point: [number, number, number]; part: string | null; face: string | null }
+export interface FieldInfo { label: string; unit: string; min: number; max: number }
+
+export interface StudySummary {
+  type: StudyType;
+  study: string;
+  mesh: { nodes: number; elements: number; order: number; min_quality: number; mean_quality: number; poor_elements: number };
+  warnings: string[];
+  fields: Record<string, FieldInfo>;
+  timing_s: { mesh: number; solve: number; total: number };
+  solver: { name: string; version: string | null; threads: number };
+  deform_scale?: number;
+  target?: string;
+  // static
+  max_von_mises_mpa?: number;
+  max_von_mises_at?: Where;
+  min_safety_factor?: number;
+  min_safety_factor_at?: Where;
+  max_displacement_mm?: number;
+  max_displacement_at?: Where;
+  safety_target?: number | null;
+  reactions_n?: number[][];
+  // modal
+  frequencies_hz?: number[];
+  modes?: { index: number; frequency_hz: number; max_at: Where }[];
+  // thermal
+  max_temperature_c?: number;
+  max_temperature_at?: Where;
+  min_temperature_c?: number;
+}
+
+export interface EngineJob {
+  id: string;
+  kind: string;
+  project: string;
+  study: string;
+  name: string;
+  ref: string;
+  commit: string;
+  key: string;
+  status: 'queued' | 'running' | 'done' | 'failed' | 'cancelled';
+  progress: number;
+  stage: string;
+  target: string | null;
+  error: string | null;
+  summary: StudySummary | null;
+  cached: boolean;
+  attempts: number;
+  created: number;
+}
+
+export interface StudyState {
+  status: 'none' | 'queued' | 'running' | 'done' | 'failed' | 'problem';
+  problem?: string;
+  key?: string;
+  commit?: string;
+  warnings?: string[];
+  summary?: StudySummary;
+  files?: Record<string, string>;
+  job?: EngineJob;
+}
+
+export interface EngineStudy {
+  id: string;
+  name: string;
+  type: StudyType;
+  parts?: string[] | null;
+  materials: Record<string, string>;
+  boundaries: StudyBoundary[];
+  mesh: { size?: number | null; order: 1 | 2 };
+  modes: number;
+  safety_target?: number | null;
+  target: string;
+  state?: StudyState;
+}
+
+export interface EngineTarget {
+  id: string;
+  name: string;
+  kind: 'local' | 'remote';
+  online: boolean;
+  url?: string;
+  slots?: number;
+  running?: number;
+  problem?: string;
+  devices: {
+    cpu: { model: string; performance_cores: number; logical_cores: number; arch: string };
+    memory_gb: number | null;
+    gpus: { name: string; memory_gb: number }[];
+    platform: string;
+    solvers: Record<string, string | null>;
+  } | null;
+}
+
+export interface Material { name: string; E: number; nu: number; density: number; yield: number; conductivity: number }
+
+export interface SimState {
+  studies: EngineStudy[];
+  jobs: Record<string, EngineJob>;
+  targets: EngineTarget[] | null;
+  materials: Material[];
+  loaded: boolean;
+}
+
 /** Engine slice of the app store; null while the app runs on mock data. */
 export interface EngineState {
   online: boolean;
@@ -154,4 +274,5 @@ export interface EngineState {
   /** card id → index of the answer in spec.yaml */
   cardAns: Record<number, { qid: string; idx: number }>;
   compare: Record<string, { mass_kg: number; ok: boolean }>;
+  sim: SimState;
 }
