@@ -81,6 +81,43 @@
       "title": "Boundary",
       "type": "object"
     },
+    "Driver": {
+      "description": "Drives one mate: a motor at a speed, a torque (force), or a move to a position.",
+      "properties": {
+        "mate": {
+          "title": "Mate",
+          "type": "string"
+        },
+        "kind": {
+          "default": "speed",
+          "enum": [
+            "speed",
+            "torque",
+            "position"
+          ],
+          "title": "Kind",
+          "type": "string"
+        },
+        "value": {
+          "description": "speed: rpm or mm/s; torque: N·m or N; position: deg or mm from the modelled position",
+          "title": "Value",
+          "type": "number"
+        },
+        "ramp": {
+          "default": 0.2,
+          "description": "Seconds to reach the value (smooth start)",
+          "minimum": 0,
+          "title": "Ramp",
+          "type": "number"
+        }
+      },
+      "required": [
+        "mate",
+        "value"
+      ],
+      "title": "Driver",
+      "type": "object"
+    },
     "FaceRef": {
       "properties": {
         "part": {
@@ -141,6 +178,140 @@
       },
       "title": "MeshSettings",
       "type": "object"
+    },
+    "MotionSetup": {
+      "properties": {
+        "duration": {
+          "default": 2.0,
+          "description": "Simulated time in s",
+          "exclusiveMinimum": 0,
+          "maximum": 600,
+          "title": "Duration",
+          "type": "number"
+        },
+        "timestep": {
+          "default": 0.001,
+          "description": "Integrator step in s",
+          "maximum": 0.01,
+          "minimum": 1e-05,
+          "title": "Timestep",
+          "type": "number"
+        },
+        "gravity": {
+          "description": "m/s²",
+          "items": {
+            "type": "number"
+          },
+          "title": "Gravity",
+          "type": "array"
+        },
+        "contacts": {
+          "default": false,
+          "description": "Collide parts that no mate connects (convex decomposition with CoACD)",
+          "title": "Contacts",
+          "type": "boolean"
+        },
+        "damping": {
+          "default": 0.0,
+          "description": "Damping on every joint, N·m·s/rad or N·s/mm",
+          "minimum": 0,
+          "title": "Damping",
+          "type": "number"
+        },
+        "drivers": {
+          "items": {
+            "$ref": "#/$defs/Driver"
+          },
+          "title": "Drivers",
+          "type": "array"
+        },
+        "springs": {
+          "items": {
+            "$ref": "#/$defs/Spring"
+          },
+          "title": "Springs",
+          "type": "array"
+        },
+        "sweep": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Sweep"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
+        },
+        "samples": {
+          "default": 400,
+          "description": "Points in the time series",
+          "maximum": 5000,
+          "minimum": 20,
+          "title": "Samples",
+          "type": "integer"
+        }
+      },
+      "title": "MotionSetup",
+      "type": "object"
+    },
+    "Spring": {
+      "properties": {
+        "mate": {
+          "title": "Mate",
+          "type": "string"
+        },
+        "stiffness": {
+          "default": 0.0,
+          "description": "N·m/rad (revolute) or N/mm (prismatic)",
+          "minimum": 0,
+          "title": "Stiffness",
+          "type": "number"
+        },
+        "damping": {
+          "default": 0.0,
+          "description": "N·m·s/rad (revolute) or N·s/mm (prismatic)",
+          "minimum": 0,
+          "title": "Damping",
+          "type": "number"
+        },
+        "rest": {
+          "default": 0.0,
+          "description": "Unloaded position, deg or mm from the modelled position",
+          "title": "Rest",
+          "type": "number"
+        }
+      },
+      "required": [
+        "mate"
+      ],
+      "title": "Spring",
+      "type": "object"
+    },
+    "Sweep": {
+      "description": "Runs the study once per value, as parallel worlds (MuJoCo Warp on a CUDA target, a process pool elsewhere).",
+      "properties": {
+        "parameter": {
+          "description": "drivers.<mate>.value, springs.<mate>.stiffness, springs.<mate>.damping, mass.<part> (kg) or damping",
+          "title": "Parameter",
+          "type": "string"
+        },
+        "values": {
+          "items": {
+            "type": "number"
+          },
+          "maxItems": 4096,
+          "minItems": 1,
+          "title": "Values",
+          "type": "array"
+        }
+      },
+      "required": [
+        "parameter",
+        "values"
+      ],
+      "title": "Sweep",
+      "type": "object"
     }
   },
   "properties": {
@@ -157,7 +328,8 @@
       "enum": [
         "static",
         "modal",
-        "thermal"
+        "thermal",
+        "motion"
       ],
       "title": "Type",
       "type": "string"
@@ -221,6 +393,18 @@
       "description": "Compute target id, or auto",
       "title": "Target",
       "type": "string"
+    },
+    "motion": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/MotionSetup"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Motion studies: drivers, springs, duration, sweep"
     }
   },
   "required": [
@@ -231,5 +415,5 @@
   "type": "object",
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://newcad.dev/schemas/study.schema.json",
-  "description": "A simulation study, stored as studies/<id>.yaml in the project repository. Units: mm, N, MPa, °C, W."
+  "description": "A simulation study, stored as studies/<id>.yaml in the project repository. Units: mm, N, MPa, °C, W; motion studies: mm, deg, N, N·m, s, rpm."
 }

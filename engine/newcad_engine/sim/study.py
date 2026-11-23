@@ -8,6 +8,10 @@ face tag, plus the face's geometric signature so a rebuild that renumbers or
 moves faces can be re-matched (see geometry/facetags.py).
 
 Units: mm, N, MPa, °C, W. Gravity is given in m/s².
+
+Motion studies (`type: motion`) have no boundaries or mesh: their joints are
+the mates in assembly.yaml, and `motion` holds drivers, springs, duration and
+an optional parameter sweep (see sim/motion/model.py).
 """
 from __future__ import annotations
 
@@ -18,14 +22,16 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from ..geometry.facetags import rematch
 from . import materials as M
+from .motion.model import MotionSetup
 
-StudyType = Literal["static", "modal", "thermal"]
+StudyType = Literal["static", "modal", "thermal", "motion"]
 BoundaryType = Literal["fixed", "force", "pressure", "gravity", "temperature", "heat_flux", "convection"]
 
 ALLOWED: dict[str, set[str]] = {
     "static": {"fixed", "force", "pressure", "gravity"},
     "modal": {"fixed"},
     "thermal": {"temperature", "heat_flux", "convection"},
+    "motion": set(),
 }
 NEEDS_FACES = {"fixed", "force", "pressure", "temperature", "heat_flux", "convection"}
 
@@ -75,6 +81,7 @@ class Study(BaseModel):
     modes: int = Field(default=6, ge=1, le=30)
     safety_target: float | None = Field(default=None, gt=0)
     target: str = Field(default="auto", description="Compute target id, or auto")
+    motion: MotionSetup | None = Field(default=None, description="Motion studies: drivers, springs, duration, sweep")
 
     @field_validator("id")
     @classmethod

@@ -35,3 +35,11 @@ curl -X POST http://127.0.0.1:<port>/api/targets -H "Authorization: Bearer <engi
 The scheduler then picks a target per job: CPU-only solvers (Gmsh, CalculiX) stay on this computer unless
 it is busy; solvers that prefer CUDA go to a node with a GPU. A study can pin a target in its YAML
 (`target: lab-gpu`). If a node drops out mid-job, the job moves to another target.
+
+## Motion sweeps on the GPU
+
+Motion parameter sweeps (`motion.sweep` jobs: many speeds, spring rates or masses of one mechanism) prefer
+a node that has an NVIDIA GPU and MuJoCo Warp (`uv pip install ".[cuda]"`, already in the Docker image).
+There every variant runs as one world of a single batched model. On a node or computer without them the
+same sweep runs on a CPU process pool with MuJoCo, so a Mac gives the same numbers, only slower. Single
+motion runs always use MuJoCo on the CPU.

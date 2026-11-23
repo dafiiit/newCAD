@@ -113,7 +113,17 @@ def _tessellate(shape: Any, tolerance: float, angular: float) -> dict[str, Any]:
             com = [m.X, m.Y, m.Z]
         except Exception:
             com = [c.X, c.Y, c.Z]
-        sigs.append({"type": gt, "area": float(face.area), "center": [c.X, c.Y, c.Z], "normal": nvec if gt == "plane" else None, "com": com})
+        sig = {"type": gt, "area": float(face.area), "center": [c.X, c.Y, c.Z], "normal": nvec if gt == "plane" else None, "com": com}
+        if gt in ("cylinder", "cone", "sphere", "torus"):
+            try:  # bores, pins and balls: joints (mates) take their axis and centre from these
+                ax = face.axis_of_rotation
+                sig["axis"] = [ax.direction.X, ax.direction.Y, ax.direction.Z]
+                sig["axis_point"] = [ax.position.X, ax.position.Y, ax.position.Z]
+                if gt in ("cylinder", "sphere"):
+                    sig["radius"] = float(face.radius)
+            except Exception:
+                pass
+        sigs.append(sig)
         if not tris:
             continue
         v = np.array([[p.X, p.Y, p.Z] for p in verts], dtype=np.float64)
@@ -137,6 +147,19 @@ def _tessellate(shape: Any, tolerance: float, angular: float) -> dict[str, Any]:
         "positions": np.concatenate(pos), "normals": np.concatenate(nor), "indices": np.concatenate(idx),
         "face_ids": np.concatenate(fid), "sigs": sigs, "tags": tags,
     }
+
+
+def _mass_props(shape: Any) -> dict[str, Any]:
+    """Centre of mass and inertia tensor about it, for unit density (mm, mm³, mm⁵). Motion studies scale by density."""
+    from OCP.BRepGProp import BRepGProp
+    from OCP.GProp import GProp_GProps
+    try:
+        g = GProp_GProps()
+        BRepGProp.VolumeProperties_s(shape.wrapped, g)
+        c, m = g.CentreOfMass(), g.MatrixOfInertia()
+        return {"com": [c.X(), c.Y(), c.Z()], "inertia_mm5": [[m.Value(i, j) for j in (1, 2, 3)] for i in (1, 2, 3)]}
+    except Exception:
+        return {}
 
 
 def _install_modules(modules: dict[str, str]) -> None:
@@ -194,6 +217,7 @@ def job_build(job: dict[str, Any]) -> dict[str, Any]:
     (out / "part.glb").write_bytes(glb)
     meta = {
         "volume_mm3": float(shape.volume),
+        **_mass_props(shape),
         "area_mm2": float(shape.area),
         "center": [c.X, c.Y, c.Z],
         "bbox": {"min": [bb.min.X, bb.min.Y, bb.min.Z], "max": [bb.max.X, bb.max.Y, bb.max.Z]},

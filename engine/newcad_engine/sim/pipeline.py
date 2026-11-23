@@ -2,6 +2,8 @@
 
     python -m newcad_engine.sim.pipeline <job_dir> <out_dir>
 
+Motion studies (`type: motion`) go to sim/motion/pipeline.py instead (MuJoCo).
+
 job_dir holds `job.json` (a study resolved by sim.study.resolve, plus
 `threads` and `timeout_s`) and `parts/<id>.brep`. The pipeline meshes with
 Gmsh, solves with CalculiX and writes:
@@ -52,6 +54,9 @@ def run(job_dir: Path, out_dir: Path) -> dict[str, Any]:
 
     job = json.loads((job_dir / "job.json").read_text())
     out_dir.mkdir(parents=True, exist_ok=True)
+    if job.get("type") == "motion":
+        from .motion.pipeline import run as run_motion
+        return run_motion(job, job_dir, out_dir, emit)
     threads = int(job.get("threads") or 1)
     t0 = time.perf_counter()
     emit(progress=0.02, stage="Meshing")
@@ -166,7 +171,7 @@ def main() -> None:
     except Exception as e:  # report every failure as one readable line
         from .fem.calculix import SolverError
         from .mesh.gmsh_mesh import MeshError
-        known = isinstance(e, (SolverError, MeshError))
+        known = isinstance(e, (SolverError, MeshError, FloatingPointError))
         msg = str(e) if known else f"{type(e).__name__}: {e}"
         emit(done=True, ok=False, error=msg, trace=None if known else traceback.format_exc(limit=8)[-3000:])
 

@@ -5,7 +5,7 @@ its devices and installed solvers. A job can run on a target that has every
 solver it needs and a free slot. Among those:
 
 - a job whose solvers can use a CUDA GPU prefers a target that has one
-  (fluids and batch motion in later phases);
+  (motion sweeps with MuJoCo Warp; fluids in Phase 5);
 - CPU-only jobs prefer the local target (no upload), unless it is busy;
 - otherwise the target with the most performance cores wins.
 
@@ -31,6 +31,9 @@ ADAPTERS: dict[str, SolverAdapter] = {
     "gmsh": SolverAdapter("gmsh", "Gmsh", "GPL-2.0-or-later", ("cpu",), note="Tetrahedral volume meshing"),
     "calculix": SolverAdapter("calculix", "CalculiX", "GPL-2.0", ("cpu",),
                               note="Static, modal and steady thermal FEM. CPU only: the CUDA path through PaStiX is experimental"),
+    "mujoco": SolverAdapter("mujoco", "MuJoCo", "Apache-2.0", ("cpu",), note="Rigid-body motion with joints, drivers and contacts"),
+    "mujoco_warp": SolverAdapter("mujoco_warp", "MuJoCo Warp", "Apache-2.0", ("cuda", "cpu"), prefers="cuda",
+                                 note="Many parallel MuJoCo worlds on an NVIDIA GPU (parameter sweeps)"),
 }
 
 # what each job kind needs
@@ -38,7 +41,13 @@ JOB_SOLVERS: dict[str, tuple[str, ...]] = {
     "fem.static": ("gmsh", "calculix"),
     "fem.modal": ("gmsh", "calculix"),
     "fem.thermal": ("gmsh", "calculix"),
+    "motion.run": ("mujoco",),
+    "motion.sweep": ("mujoco",),
 }
+
+# optional solvers that make a job faster where they are installed (a sweep without
+# MuJoCo Warp falls back to a CPU process pool)
+JOB_PREFERS: dict[str, str] = {"motion.sweep": "mujoco_warp"}
 
 
 @dataclass
@@ -52,8 +61,9 @@ def requirements(kind: str) -> dict[str, Any]:
     solvers = JOB_SOLVERS.get(kind)
     if solvers is None:
         raise KeyError(f"Unknown job kind {kind}")
-    wants_gpu = any(ADAPTERS[s].prefers == "cuda" for s in solvers)
-    return {"solvers": list(solvers), "prefers_gpu": wants_gpu}
+    pref = JOB_PREFERS.get(kind)
+    wants_gpu = any(ADAPTERS[s].prefers == "cuda" for s in (*solvers, *([pref] if pref else [])))
+    return {"solvers": list(solvers), "prefers_gpu": wants_gpu, "prefers": pref}
 
 
 def choose(kind: str, targets: list[dict[str, Any]], busy: dict[str, int], pinned: str | None = None,
@@ -85,7 +95,7 @@ def choose(kind: str, targets: list[dict[str, Any]], busy: dict[str, int], pinne
 
     def score(t: dict[str, Any]) -> tuple[float, ...]:
         d = t.get("devices") or {}
-        gpu = 1.0 if d.get("gpus") else 0.0
+        gpu = 1.0 if d.get("gpus") and (not req["prefers"] or (d.get("solvers") or {}).get(req["prefers"])) else 0.0
         cores = float((d.get("cpu") or {}).get("performance_cores") or 1)
         local = 1.0 if t["kind"] == "local" else 0.0
         if req["prefers_gpu"]:

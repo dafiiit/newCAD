@@ -5,10 +5,10 @@ Desktop CAD app. See the implementation plan for the full architecture (React + 
 ## Repository layout
 
 - `apps/web` — the React + Vite + TypeScript UI (react-three-fiber for the 3D view). Runs in any browser.
-- `engine` — the Python engine: git-backed projects, sandboxed build123d workers, REST + WebSocket API, MCP server, BuilderBot, job queue and simulation (Gmsh + CalculiX).
-- `packages/protocol` — JSON Schemas shared by engine and app (the study file so far).
+- `engine` — the Python engine: git-backed projects, sandboxed build123d workers, REST + WebSocket API, MCP server, BuilderBot, job queue and simulation (Gmsh + CalculiX for FEM, MuJoCo for motion).
+- `packages/protocol` — JSON Schemas shared by engine and app (study and joint files).
 - `compute-node` — Docker image and notes for a remote compute target (`newcad-engine --worker`).
-- `validation` — analytic FEM cases (cantilever, beam frequency, plate with hole, conduction) run in CI.
+- `validation` — analytic cases run in CI: FEM (cantilever, beam frequency, plate with hole, conduction) and motion (four-bar linkage, rotating link, bearing load hand-off).
 
 ## Run the web UI
 
@@ -42,8 +42,18 @@ It needs CalculiX on the engine machine: `apt install calculix-ccx` on Linux, `c
 Jobs go to a compute target: this computer, or a compute node started with `newcad-engine --worker` (see `compute-node/README.md`), added under Check → Compute targets. BuilderBot and external agents use the same studies through the `sim_*` MCP tools (`sim_create_study`, `sim_list_faces`, `sim_add_boundary`, `sim_run`, `sim_results`, …).
 
 ```sh
-cd engine && uv run --extra dev python ../validation/report.py   # FEM vs. beam theory table
+cd engine && uv run --extra dev python ../validation/report.py   # FEM and motion vs. analytic results
 ```
+
+### Motion (MuJoCo)
+
+A motion study (Check → New study → Motion) moves the parts as rigid bodies. Joints are mates in `assembly.yaml`: add a revolute, slider, ball or fixed joint and click the faces it connects (the bore of each part; one part alone is joined to ground). The engine takes the joint centre and axis from the picked round faces, builds an MJCF model (closed loops such as a four-bar become equality constraints) and runs MuJoCo. Drivers (speed, torque, move-to), springs and dampers are set per joint.
+
+Results: the peak bearing load of every joint (force on each part, when it happens), driver effort, joint ranges, a time plot and playback of the motion in the viewport (`motion.glb`, one animation track per part). The `MJCF model` link downloads `model.xml` for MuJoCo's own viewer. **Use bearing load** turns a joint's peak load into a static stress study of that part: the load goes on the bore faces, the part is held at its other joints, and you can run CalculiX on it without retyping anything.
+
+A parameter sweep (driver value, spring stiffness or damping, part mass, joint damping) runs every value as one job. On a compute target with an NVIDIA GPU and `mujoco-warp` installed (`pip install '.[cuda]'`, the compute-node image does this) all values run as parallel worlds on the GPU; elsewhere, including Macs, they run on a CPU process pool. Contacts between parts are off by default; switched on, boxes, cylinders and spheres stay primitives and other parts are split into convex pieces with CoACD.
+
+**Grab and drag** runs a Rapier simulation of the same bodies and joints in the browser, so you can pull a part and feel how the mechanism moves. It is labelled as preview physics: every number in the Check tab comes from MuJoCo. Agents use the same setup through `motion_add_joint`, `motion_configure` and `sim_bearing_load`.
 
 ### BuilderBot's model
 

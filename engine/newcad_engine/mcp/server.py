@@ -30,7 +30,8 @@ INSTRUCTIONS = """NewCAD is a CAD tool where designs are build123d Python script
 - Edits are staged on a branch; project_commit turns them into a version. Branches are concepts, commits are versions.
 - After writing code, call geometry_rebuild and fix any error it reports before committing.
 - view_snapshot returns a picture of the current state so you can check the result visually.
-- Simulation: sim_create_study, then sim_list_faces to find face tags, sim_add_boundary for supports and loads, sim_run to solve (Gmsh + CalculiX). Units mm, N, MPa."""
+- Simulation: sim_create_study, then sim_list_faces to find face tags, sim_add_boundary for supports and loads, sim_run to solve (Gmsh + CalculiX). Units mm, N, MPa.
+- Motion (MuJoCo): joints are mates in the assembly (motion_add_joint, from bore/pin faces found with sim_list_faces). Create a study of type motion, set drivers and springs with motion_configure, run it with sim_run. sim_bearing_load turns a joint's peak load into a static stress study."""
 
 ReadRef = Annotated[str | None, Field(description="Branch name or commit id to read. Default: the user's current version (HEAD).")]
 WriteBranch = Annotated[str | None, Field(description="Branch to change. Default: the branch the user has checked out.")]
@@ -410,8 +411,9 @@ def build_mcp(engine: Any) -> MCPServer:
 
 
     def asm_text(asm: dict[str, Any]) -> str:
+        from ..sim.motion.model import public_mate
         out = {"parts": [{k: v for k, v in e.items() if k in ("id", "name", "material", "color", "mass_kg", "file")} for e in asm["parts"]],
-               "mates": asm.get("mates") or []}
+               "mates": [public_mate(m) for m in asm.get("mates") or []]}
         return dump(out)
 
     @tool("assembly_read", read_only=True)
@@ -626,13 +628,16 @@ def build_mcp(engine: Any) -> MCPServer:
             ax, sgn = AXES[facing]
             faces = [f for f in faces if f.get("normal") and f["normal"][ax] * sgn > 0.98]
         rows = [{"tag": f["tag"], "type": f["type"], "area": round(f["area"], 2), "center": [round(c, 2) for c in f["center"]],
-                 **({"normal": [round(c, 3) for c in f["normal"]]} if f.get("normal") else {})} for f in faces]
+                 **({"normal": [round(c, 3) for c in f["normal"]]} if f.get("normal") else {}),
+                 **({"axis": [round(c, 3) for c in f["axis"]], "radius": round(f["radius"], 3)} if f.get("axis") and f.get("radius") else {})}
+                for f in faces]
         return json.dumps(rows) if rows else "No matching faces."
 
     @tool("sim_create_study")
     async def sim_create_study(project: ProjectId, name: Annotated[str, Field(description="e.g. 'Bracket under shelf load'")],
-                               type: Literal["static", "modal", "thermal"] = "static", branch: WriteBranch = None) -> str:
-        """Create an empty study. Then add boundary conditions with sim_add_boundary and run it with sim_run."""
+                               type: Literal["static", "modal", "thermal", "motion"] = "static", branch: WriteBranch = None) -> str:
+        """Create an empty study. FEM studies: add boundary conditions with sim_add_boundary. Motion studies: add joints with
+        motion_add_joint and drivers with motion_configure. Run either with sim_run."""
         p = proj(project)
         b = wbranch(p, branch)
         st = sim.create(p, name, type, b, current_actor.get().author)
@@ -754,6 +759,102 @@ def build_mcp(engine: Any) -> MCPServer:
             j = st["job"]
             return f"Status {st['status']}: {j['stage']}" + (f" Error: {j['error']}" if j.get("error") else "")
         return "Not run on this version yet. Use sim_run."
+
+    # ---------- motion.* ----------
+
+    mates = engine.mates
+
+    @tool("motion_list_joints", read_only=True)
+    async def motion_list_joints(project: ProjectId, ref: ReadRef = None) -> str:
+        """Joints (mates) of the assembly with their type, parts, centre and axis as resolved from the picked faces."""
+        p = proj(project)
+        rows = await mates.resolved(p, rref(p, ref))
+        out = [{k: v for k, v in m.items() if k not in ("faces",)} | {"faces": [f"{f['part']}/{f['tag']}" for f in m["faces"]]} for m in rows]
+        return json.dumps(out, indent=1) if out else "No joints yet. Add them with motion_add_joint."
+
+    @tool("motion_add_joint")
+    async def motion_add_joint(project: ProjectId,
+                               type: Annotated[Literal["revolute", "prismatic", "ball", "fixed"], Field(description="revolute: hinge/bearing; prismatic: slide; ball; fixed: welded or bolted")],
+                               parts: Annotated[list[str], Field(description="The two parts, e.g. ['crank', 'coupler']; use 'ground' for the fixed world. Joint position is parts[1] relative to parts[0]")],
+                               faces: Annotated[list[str] | None, Field(description="'part/tag' of bore, pin or ball faces (sim_list_faces); axis and centre come from them")] = None,
+                               origin: Annotated[list[float] | None, Field(description="Joint centre in mm, if no faces")] = None,
+                               axis: Annotated[list[float] | None, Field(description="Joint axis, if no round faces")] = None,
+                               limits: Annotated[list[float] | None, Field(description="[min, max] deg or mm")] = None,
+                               label: str = "", branch: WriteBranch = None) -> str:
+        """Add a joint between two parts (or a part and ground). Every part must reach ground through joints or it falls freely."""
+        p = proj(project)
+        b = wbranch(p, branch)
+        refs = []
+        for fr in faces or []:
+            part, _, tag = fr.partition("/")
+            man = await geo.build(p, b, [part])
+            x = next((q for q in man["parts"] if q["id"] == part), None)
+            if x is None or not x["ok"]:
+                raise StoreError(f"Part {part} is missing or doesn't build")
+            meta = {f["tag"]: f for f in (geo.meta(x["key"]) or {"faces": []})["faces"]}
+            if tag not in meta:
+                raise StoreError(f"No face {tag} on {part}. Use sim_list_faces to get current tags.")
+            refs.append({"part": part, "tag": tag, "sig": {k: v for k, v in meta[tag].items() if k != "tag"}})
+        m = mates.add(p, {"type": type, "parts": parts, "faces": refs, "origin": origin, "axis": axis, "limits": limits, "label": label}, b)
+        res = next((x for x in await mates.resolved(p, b) if x["id"] == m.id), {})
+        if res.get("problem"):
+            return f"Added joint {m.id}, but it can't be used yet: {res['problem']}"
+        return f"Added joint {m.id} ({type}, {parts[0]} to {parts[1]}) at {res.get('origin_mm')} mm, axis {res.get('axis_dir')} (staged on {b})."
+
+    @tool("motion_remove_joint", destructive=True)
+    async def motion_remove_joint(project: ProjectId, joint: str, branch: WriteBranch = None) -> str:
+        """Remove a joint from the assembly."""
+        p = proj(project)
+        mates.remove(p, joint, wbranch(p, branch))
+        return f"Removed joint {joint}."
+
+    @tool("motion_configure")
+    async def motion_configure(project: ProjectId, study: StudyId,
+                               duration: Annotated[float | None, Field(description="Simulated seconds")] = None,
+                               timestep: Annotated[float | None, Field(description="Seconds per step (default 0.001)")] = None,
+                               gravity: Annotated[list[float] | None, Field(description="m/s², default [0, 0, -9.81]")] = None,
+                               drivers: Annotated[list[dict[str, Any]] | None, Field(description="Replaces the drivers: [{mate, kind: speed|torque|position, value (rpm or mm/s; N·m or N; deg or mm), ramp s}]")] = None,
+                               springs: Annotated[list[dict[str, Any]] | None, Field(description="Replaces the springs: [{mate, stiffness (N·m/rad or N/mm), damping, rest}]")] = None,
+                               contacts: Annotated[bool | None, Field(description="Collide parts no joint connects (slower)")] = None,
+                               damping: Annotated[float | None, Field(description="Damping on every joint")] = None,
+                               sweep: Annotated[dict[str, Any] | None, Field(description="{parameter: drivers.<mate>.value | springs.<mate>.stiffness | springs.<mate>.damping | mass.<part> | damping, values: [...]}; {} removes it. Runs as parallel worlds (GPU with MuJoCo Warp where available)")] = None,
+                               branch: WriteBranch = None) -> str:
+        """Set up a motion study: drivers (motors), springs, duration, gravity, contacts and an optional parameter sweep."""
+        p = proj(project)
+        b = wbranch(p, branch)
+        d = sim.read(p, study, b).to_yaml_dict()
+        if d.get("type") != "motion":
+            raise StoreError(f"{study} is not a motion study")
+        mo = dict(d.get("motion") or {})
+        for k, v in (("duration", duration), ("timestep", timestep), ("gravity", gravity), ("drivers", drivers), ("springs", springs),
+                     ("contacts", contacts), ("damping", damping)):
+            if v is not None:
+                mo[k] = v
+        if sweep is not None:
+            if sweep:
+                mo["sweep"] = sweep
+            else:
+                mo.pop("sweep", None)
+        d["motion"] = mo
+        sim.replace(p, study, d, b, current_actor.get().author)
+        st = await sim.state(p, study, b)
+        return f"Updated {study}." + (f" It can't run yet: {st['problem']}" if st.get("problem") else "")
+
+    @tool("sim_bearing_load")
+    async def sim_bearing_load(project: ProjectId, study: Annotated[str, Field(description="A motion study that has a result")],
+                               joint: Annotated[str, Field(description="Joint id")],
+                               part: Annotated[str, Field(description="The part to check (one of the joint's parts)")],
+                               into: Annotated[str | None, Field(description="Existing static study to update; default: a new one")] = None,
+                               ref: ReadRef = None) -> str:
+        """Use the peak bearing load of a joint from a motion run as the load of a static stress study of one part
+        (held at its other joints). Then run that study with sim_run."""
+        from ..sim.service import bearing_load
+        p = proj(project)
+        st = await bearing_load(engine, p, study, joint, part, rref(p, ref), into, current_actor.get().author)
+        f = next(b for b in st.boundaries if b.type == "force")
+        held = any(b.type == "fixed" for b in st.boundaries)
+        return (f"Static study {st.id}: {part} loaded with [{', '.join(f'{v:.1f}' for v in f.vector or [])}] N at joint {joint}"
+                + ("" if held else ". It has no other joint faces to hold it: add a fixed support with sim_add_boundary") + ". Run it with sim_run.")
 
     @tool("sim_targets", read_only=True)
     async def sim_targets() -> str:

@@ -101,9 +101,25 @@ def _gmsh_version() -> str | None:
         return "unknown"
 
 
+def _dist_version(module: str, dist: str) -> str | None:
+    if importlib.util.find_spec(module) is None:
+        return None
+    try:
+        return importlib.metadata.version(dist)
+    except importlib.metadata.PackageNotFoundError:
+        return "unknown"
+
+
 def solvers() -> dict[str, str | None]:
+    """Required solvers (None when missing) plus optional accelerators, listed only where installed."""
     from ..sim.fem.calculix import ccx_version
-    return {"gmsh": _gmsh_version(), "calculix": ccx_version()}
+    out: dict[str, str | None] = {"gmsh": _gmsh_version(), "calculix": ccx_version(), "mujoco": _dist_version("mujoco", "mujoco")}
+    # MuJoCo Warp only pays off on a CUDA GPU; without one a sweep uses a CPU process pool
+    if cuda_gpus() and (v := _dist_version("mujoco_warp", "mujoco-warp")):
+        out["mujoco_warp"] = v
+    if v := _dist_version("coacd", "coacd"):
+        out["coacd"] = v
+    return out
 
 
 @functools.lru_cache(maxsize=1)

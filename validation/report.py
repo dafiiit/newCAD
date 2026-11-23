@@ -7,6 +7,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from cases import CASES  # noqa: E402
+from motion_cases import MOTION_CASES  # noqa: E402
 from newcad_engine.config import Config  # noqa: E402
 from newcad_engine.core import Engine  # noqa: E402
 
@@ -17,13 +18,13 @@ async def main() -> int:
         await eng.start()
         try:
             rows = []
-            for fn in CASES.values():
+            for fn in [*CASES.values(), *MOTION_CASES.values()]:
                 rows += await fn(eng)
         finally:
             await eng.stop()
-    print("| Case | Quantity | FEM | Reference | Error | Tolerance | |\n|---|---|---:|---:|---:|---:|---|")
+    print("| Case | Quantity | Engine | Reference | Error | Tolerance | |\n|---|---|---:|---:|---:|---:|---|")
     for r in rows:
-        print(f"| {r.case} | {r.quantity} | {r.fem:.4g} | {r.reference:.4g} | {r.error:+.2%} | ±{r.tolerance:.0%} | {'pass' if r.ok else 'FAIL'} |")
+        print(f"| {r.case} | {r.quantity} | {r.fem:.4g} | {r.reference:.4g} | {r.error_text()} | {r.tolerance_text()} | {'pass' if r.ok else 'FAIL'} |")
     for r in rows:
         if r.detail:
             print(f"\n- {r.case} ({r.quantity}): {r.detail}", end="")

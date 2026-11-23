@@ -14,12 +14,19 @@ OUT = Path(__file__).resolve().parents[2] / "packages" / "protocol" / "schemas"
 
 
 def schemas() -> dict[str, dict]:
+    from newcad_engine.sim.motion.model import Mate
     from newcad_engine.sim.study import Study
     s = Study.model_json_schema()
     s["$schema"] = "https://json-schema.org/draft/2020-12/schema"
     s["$id"] = "https://newcad.dev/schemas/study.schema.json"
-    s["description"] = "A simulation study, stored as studies/<id>.yaml in the project repository. Units: mm, N, MPa, °C, W."
-    return {"study.schema.json": s}
+    s["description"] = ("A simulation study, stored as studies/<id>.yaml in the project repository. Units: mm, N, MPa, °C, W; "
+                        "motion studies: mm, deg, N, N·m, s, rpm.")
+    m = Mate.model_json_schema()
+    m["$schema"] = "https://json-schema.org/draft/2020-12/schema"
+    m["$id"] = "https://newcad.dev/schemas/mate.schema.json"
+    m["description"] = ("A joint between two parts (or a part and 'ground'), one entry of `mates` in assembly.yaml. "
+                        "Its position is parts[1] relative to parts[0], zero as modelled. Units: mm, deg.")
+    return {"study.schema.json": s, "mate.schema.json": m}
 
 
 def render(s: dict) -> str:

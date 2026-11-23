@@ -5,7 +5,7 @@
 #
 # Then add it in the app under Settings → Compute with its URL and the token.
 # Put it behind HTTPS (a reverse proxy, or NEWCAD_TLS_CERT/NEWCAD_TLS_KEY) when it is reached over a network
-# you don't trust. The CUDA base image is there for the GPU solvers of later phases; FEM runs on the CPU.
+# you don't trust. FEM and single motion runs use the CPU; motion parameter sweeps use the GPU (MuJoCo Warp).
 FROM nvidia/cuda:12.6.3-runtime-ubuntu24.04
 
 ENV DEBIAN_FRONTEND=noninteractive PYTHONUNBUFFERED=1 UV_COMPILE_BYTECODE=1 NEWCAD_HOME=/data
@@ -18,7 +18,8 @@ COPY --from=ghcr.io/astral-sh/uv:0.8 /uv /usr/local/bin/uv
 WORKDIR /opt/newcad/engine
 COPY engine/pyproject.toml engine/README.md* ./
 COPY engine/newcad_engine ./newcad_engine
-RUN uv venv --python 3.12 /opt/venv && VIRTUAL_ENV=/opt/venv uv pip install --no-cache .
+# the cuda extra adds MuJoCo Warp: motion sweeps run as parallel worlds on the GPU
+RUN uv venv --python 3.12 /opt/venv && VIRTUAL_ENV=/opt/venv uv pip install --no-cache ".[cuda]"
 ENV PATH=/opt/venv/bin:$PATH
 
 RUN useradd --create-home --uid 1000 newcad && mkdir -p /data && chown newcad /data

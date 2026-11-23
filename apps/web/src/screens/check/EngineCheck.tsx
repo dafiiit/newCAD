@@ -10,8 +10,9 @@ import {
 } from '../../engine/sim';
 import type { BoundaryType, EngineJob, EngineStudy, FieldInfo, StudySummary, StudyType, Where } from '../../engine/types';
 import { useApp, type AppState, type SimPick } from '../../state/store';
+import { MotionDetail, MotionNumbers } from './MotionCheck';
 
-const fmt = (x: number, unit = '') => {
+export const fmt = (x: number, unit = '') => {
   const a = Math.abs(x);
   const s = a === 0 ? '0' : a >= 1000 ? x.toFixed(0) : a >= 10 ? x.toFixed(1) : a >= 0.01 ? x.toFixed(3) : x.toExponential(2);
   return unit ? `${s} ${unit}` : s;
@@ -39,6 +40,7 @@ export function defaultField(sum: StudySummary | undefined): string | null {
   if (!sum) return null;
   if (sum.type === 'static') return 'von_mises';
   if (sum.type === 'thermal') return 'temp';
+  if (sum.type === 'motion') return null;
   return 'mode_mag';
 }
 
@@ -84,11 +86,12 @@ export function EngineCheckPanel() {
             const v = studyView(st);
             const b = badge(v);
             const nb = st.boundaries.length;
+            const nd = st.motion?.drivers.length ?? 0;
             return (
               <button key={st.id} className={cx('stitem', sel?.id === st.id && 'on')}
-                onClick={() => useApp.setState({ simSel: st.id, simPick: null, simProbe: null, simRange: null, simField: null })}>
+                onClick={() => useApp.setState({ simSel: st.id, simPick: null, matePick: null, motionPreview: false, simProbe: null, simRange: null, simField: null })}>
                 <span className="sticon">{STUDY_META[st.type].icon}</span>
-                <span className="stbody"><b>{st.name}</b><span className="muted">{nb ? `${nb} condition${nb > 1 ? 's' : ''}` : 'No supports or loads yet'}</span></span>
+                <span className="stbody"><b>{st.name}</b><span className="muted">{st.type === 'motion' ? (nd ? `${nd} driver${nd > 1 ? 's' : ''}${st.motion?.sweep ? ', sweep' : ''}` : 'No driver yet') : nb ? `${nb} condition${nb > 1 ? 's' : ''}` : 'No supports or loads yet'}</span></span>
                 <span className={cx('stbadge', b.cls)}>{b.text}</span>
               </button>
             );
@@ -98,9 +101,9 @@ export function EngineCheckPanel() {
       {loaded && !studies.length && <p className="muted" style={{ fontSize: 13, margin: '12px 2px 4px' }}>No studies yet. Add one, pick the faces that are held and loaded, and run it.</p>}
       {adding ? (
         <div className="simadd">
-          {(['static', 'modal', 'thermal'] as StudyType[]).map((t) => (
+          {(['static', 'modal', 'thermal', 'motion'] as StudyType[]).map((t) => (
             <button key={t} className="pillbtn" onClick={() => { setAdding(false); void createStudy(t); }}>
-              {{ static: 'Static stress', modal: 'Natural frequencies', thermal: 'Heat transfer' }[t]}
+              {{ static: 'Static stress', modal: 'Natural frequencies', thermal: 'Heat transfer', motion: 'Motion (MuJoCo)' }[t]}
             </button>
           ))}
           <button className="linkbtn" onClick={() => setAdding(false)}>Cancel</button>
@@ -108,7 +111,7 @@ export function EngineCheckPanel() {
       ) : (
         <button className="linkbtn" style={{ alignSelf: 'flex-start', marginTop: 4 }} onClick={() => setAdding(true)}>+ New study</button>
       )}
-      {sel && <StudyDetail st={sel} />}
+      {sel && (sel.type === 'motion' ? <MotionDetail st={sel} /> : <StudyDetail st={sel} />)}
       <ComputeTargets />
     </>
   );
@@ -249,7 +252,7 @@ function deformText(v: number, modal: boolean) {
   return modal ? `${n} mm` : `${n}×`;
 }
 
-function NumIn({ value, label, onCommit }: { value: number; label: string; onCommit: (n: number | null) => void }) {
+export function NumIn({ value, label, onCommit }: { value: number; label: string; onCommit: (n: number | null) => void }) {
   const [d, setD] = useState(String(value));
   useEffect(() => setD(String(value)), [value]);
   return (
@@ -308,7 +311,7 @@ function PickCard({ st, pick }: { st: EngineStudy; pick: SimPick }) {
   );
 }
 
-function JobProgress({ job }: { job: EngineJob }) {
+export function JobProgress({ job }: { job: EngineJob }) {
   return (
     <div className="simjob" aria-live="polite">
       <div className="simbar"><span style={{ width: `${Math.max(3, Math.round(job.progress * 100))}%` }} /></div>
@@ -322,6 +325,7 @@ const FIELD_OPTIONS: Record<string, { key: string; label: string }[]> = {
   static: [{ key: 'von_mises', label: 'Stress' }, { key: 'safety', label: 'Safety' }, { key: 'disp_mag', label: 'Displacement' }],
   modal: [{ key: 'mode_mag', label: 'Mode shape' }],
   thermal: [{ key: 'temp', label: 'Temperature' }],
+  motion: [],
 };
 
 export function useResultField(sum: StudySummary | undefined) {
@@ -369,6 +373,7 @@ function Results({ st, sum, files, names }: { st: EngineStudy; sum: StudySummary
 }
 
 export function ResultNumbers({ sum, names, target }: { sum: StudySummary; names: Record<string, string>; target: number }) {
+  if (sum.type === 'motion') return <MotionNumbers sum={sum} names={{ ground: 'Ground', ...names }} />;
   if (sum.type === 'static') {
     const sf = sum.min_safety_factor ?? 0;
     return (
@@ -490,18 +495,19 @@ export function EngineResultOverlay() {
     <div className="resov" aria-label="Study result">
       <div className="resovhead">
         <span className="sticon">{STUDY_META[st.type].icon}</span>
-        <span className="resovt"><b>{st.name}</b><span className="muted">{s.simPick ? `Picking faces for ${BOUNDARY_LABEL[s.simPick.type].toLowerCase()}` : b.text === 'Done' ? `${STUDY_META[st.type].group} · done` : b.text}</span></span>
+        <span className="resovt"><b>{st.name}</b><span className="muted">{s.matePick ? `Picking faces for a ${s.matePick.type} joint` : s.simPick ? `Picking faces for ${BOUNDARY_LABEL[s.simPick.type].toLowerCase()}` : b.text === 'Done' ? `${STUDY_META[st.type].group} · done` : b.text}</span></span>
       </div>
       {v.running && <JobProgress job={v.running} />}
-      {sum && !s.simPick ? (
+      {sum && !s.simPick && !s.matePick ? (
         <>
           {info && range && <EditableLegend info={info} range={range} />}
           <ResultNumbers sum={sum} names={names} target={sum.safety_target ?? st.safety_target ?? Number(s.settings.sfTarget)} />
           {s.simProbe && <div className="kv"><span>Probe{s.simProbe.face ? ` (${s.simProbe.face})` : ''}</span><b>{fmt(s.simProbe.value, s.simProbe.unit)}</b></div>}
-          {!s.simProbe && <span className="muted" style={{ fontSize: 12 }}>Click the model to read a value.</span>}
+          {!s.simProbe && st.type !== 'motion' && <span className="muted" style={{ fontSize: 12 }}>Click the model to read a value.</span>}
+          {st.type === 'motion' && <span className="muted" style={{ fontSize: 12 }}>{s.motionPreview ? 'Preview physics (Rapier): drag a part. Numbers come from MuJoCo.' : 'Playing the MuJoCo result.'}</span>}
         </>
       ) : !v.running && (
-        <p className="muted" style={{ margin: '2px 0 4px', fontSize: 13 }}>{s.simPick ? 'Click faces on the model, then press Add in the panel.' : v.problem ?? (v.failed ? v.failed.error : 'Not run on this version yet.')}</p>
+        <p className="muted" style={{ margin: '2px 0 4px', fontSize: 13 }}>{s.simPick || s.matePick ? 'Click faces on the model, then press Add in the panel.' : v.problem ?? (v.failed ? v.failed.error : 'Not run on this version yet.')}</p>
       )}
     </div>
   );

@@ -2,7 +2,8 @@
 
 Each case builds a part, sets up a study the same way the Check tab and the
 sim_* tools do (face tags picked by geometry), solves it, and compares one
-number with a closed-form reference.
+number with a closed-form reference. Motion cases (MuJoCo) are in
+motion_cases.py.
 
     cd engine && uv run --extra dev python ../validation/report.py      # table
     cd engine && uv run --extra dev pytest ../validation                 # gate
@@ -27,10 +28,19 @@ class Result:
     reference: float
     tolerance: float
     detail: str = ""
+    unit: str = ""  # set for an absolute tolerance (e.g. degrees); empty = relative
 
     @property
     def error(self) -> float:
+        if self.unit:
+            return self.fem - self.reference
         return (self.fem - self.reference) / self.reference
+
+    def error_text(self) -> str:
+        return f"{self.error:+.3g} {self.unit}" if self.unit else f"{self.error:+.2%}"
+
+    def tolerance_text(self) -> str:
+        return f"±{self.tolerance:g} {self.unit}" if self.unit else f"±{self.tolerance * 100:.3g}%"
 
     @property
     def ok(self) -> bool:

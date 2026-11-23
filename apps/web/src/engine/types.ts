@@ -142,7 +142,7 @@ export interface BotStatus {
 
 // ---------- simulation ----------
 
-export type StudyType = 'static' | 'modal' | 'thermal';
+export type StudyType = 'static' | 'modal' | 'thermal' | 'motion';
 export type BoundaryType = 'fixed' | 'force' | 'pressure' | 'gravity' | 'temperature' | 'heat_flux' | 'convection';
 
 export interface FaceRef { part: string; tag: string; sig?: Record<string, unknown> | null }
@@ -181,10 +181,92 @@ export interface StudySummary {
   // modal
   frequencies_hz?: number[];
   modes?: { index: number; frequency_hz: number; max_at: Where }[];
+  // motion (MuJoCo)
+  duration_s?: number;
+  steps?: number;
+  mates?: MotionMateResult[];
+  drivers?: MotionDriverResult[];
+  bodies?: { id: string; mass_kg: number }[];
+  peak_bearing?: { mate: string; label: string; part: string | null; force_n: number; at_s: number };
+  loop_error_mm?: number;
+  sweep?: { parameter: string; backend: string; device: string; wall_s: number; variants: number; failed: number; rows: SweepRow[] };
   // thermal
   max_temperature_c?: number;
   max_temperature_at?: Where;
   min_temperature_c?: number;
+}
+
+export interface MotionMateResult {
+  id: string;
+  label: string;
+  type: MateType;
+  parts: [string, string];
+  role: 'tree' | 'loop';
+  peak_force_n: number;
+  peak_at_s: number;
+  peak_force_world: [number, number, number];
+  /** force on each (non-ground) part from the other, in that part's modelled axes */
+  peak_force_on: Record<string, [number, number, number]>;
+  peak_moment_nm: number;
+  range: [number, number] | null;
+  range_unit: string;
+  max_speed: number | null;
+  speed_unit: string;
+}
+
+export interface MotionDriverResult { mate: string; kind: DriverKind; value: number; unit: string; peak_effort: number; rms_effort: number; effort_unit: string }
+
+export interface SweepRow { value: number; ok: boolean; error?: string; peak_force_n?: Record<string, number>; peak_effort?: Record<string, number>; range?: Record<string, [number, number] | null> }
+
+export interface MotionSeries {
+  t: number[];
+  mates: Record<string, { q: (number | null)[]; qd: (number | null)[]; force: [number, number, number][]; force_mag: number[]; moment_mag: number[] }>;
+  drivers: Record<string, number[]>;
+}
+
+export type MateType = 'revolute' | 'prismatic' | 'ball' | 'fixed';
+export type DriverKind = 'speed' | 'torque' | 'position';
+
+export interface MotionDriver { mate: string; kind: DriverKind; value: number; ramp: number }
+export interface MotionSpring { mate: string; stiffness: number; damping: number; rest: number }
+export interface MotionSetup {
+  duration: number;
+  timestep: number;
+  gravity: [number, number, number];
+  contacts: boolean;
+  damping: number;
+  drivers: MotionDriver[];
+  springs: MotionSpring[];
+  sweep?: { parameter: string; values: number[] } | null;
+  samples: number;
+}
+
+/** A mate (joint) from assembly.yaml, with its centre and axis as the engine resolves them from the picked faces. */
+export interface MotionMate {
+  id: string;
+  type: MateType;
+  parts: [string, string];
+  label: string;
+  faces: FaceRef[];
+  origin?: [number, number, number] | null;
+  axis?: [number, number, number] | null;
+  limits?: [number, number] | null;
+  origin_mm?: [number, number, number];
+  axis_dir?: [number, number, number];
+  problem?: string;
+  warnings?: string[];
+}
+
+/** Bodies and joints of a motion study (engine coordinates: Z-up mm), for the Rapier preview. */
+export interface Mechanism {
+  key: string;
+  bodies: { id: string; name: string; key: string; glb: string; mass_kg: number; com: [number, number, number]; inertia_kgmm2: number[][] }[];
+  joints: { id: string; label: string; type: MateType; parts: [string, string]; origin: [number, number, number]; axis: [number, number, number]; role: 'tree' | 'loop'; limits_si: [number, number] | null }[];
+  drivers: { mate: string; kind: DriverKind; value: number; value_si: number; ramp: number; unit: string }[];
+  springs: { mate: string; stiffness_si: number; damping_si: number; rest_si: number }[];
+  settings: { duration: number; timestep: number; gravity: [number, number, number]; contacts: boolean; damping: number };
+  roots: string[];
+  warnings: string[];
 }
 
 export interface EngineJob {
@@ -229,6 +311,7 @@ export interface EngineStudy {
   modes: number;
   safety_target?: number | null;
   target: string;
+  motion?: MotionSetup | null;
   state?: StudyState;
 }
 
@@ -257,6 +340,7 @@ export interface SimState {
   jobs: Record<string, EngineJob>;
   targets: EngineTarget[] | null;
   materials: Material[];
+  mates: MotionMate[];
   loaded: boolean;
 }
 

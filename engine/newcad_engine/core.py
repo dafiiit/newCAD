@@ -131,10 +131,11 @@ class Engine:
         from .jobs.manager import JobManager
         from .jobs.targets import LocalTarget, TargetRegistry
         from .jobs.worker_service import WorkerService
-        from .sim.service import SimService
+        from .sim.service import MateService, SimService
         self.targets = TargetRegistry(self.cfg.home / "targets.json", LocalTarget(timeout_s=self.cfg.sim_timeout_s))
         self.jobs = JobManager(self.cfg.cache_dir, self.cfg.home / "jobs", self.targets, self.events.publish)
         self.sim = SimService(self)
+        self.mates = MateService(self)
         self.worker = WorkerService(self.cfg.home / "worker", self.targets.local)
         self._watch: asyncio.Task[None] | None = None
         self._ref_seen: dict[str, str] = {}

@@ -1,0 +1,130 @@
+{
+  "$defs": {
+    "MateFace": {
+      "properties": {
+        "part": {
+          "title": "Part",
+          "type": "string"
+        },
+        "tag": {
+          "title": "Tag",
+          "type": "string"
+        },
+        "sig": {
+          "anyOf": [
+            {
+              "additionalProperties": true,
+              "type": "object"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Sig"
+        }
+      },
+      "required": [
+        "part",
+        "tag"
+      ],
+      "title": "MateFace",
+      "type": "object"
+    }
+  },
+  "properties": {
+    "id": {
+      "title": "Id",
+      "type": "string"
+    },
+    "type": {
+      "default": "revolute",
+      "enum": [
+        "revolute",
+        "prismatic",
+        "ball",
+        "fixed"
+      ],
+      "title": "Type",
+      "type": "string"
+    },
+    "parts": {
+      "description": "The two parts it connects; 'ground' is the fixed world",
+      "items": {
+        "type": "string"
+      },
+      "title": "Parts",
+      "type": "array"
+    },
+    "label": {
+      "default": "",
+      "title": "Label",
+      "type": "string"
+    },
+    "faces": {
+      "description": "Bore, pin or ball faces; axis and centre are taken from them",
+      "items": {
+        "$ref": "#/$defs/MateFace"
+      },
+      "title": "Faces",
+      "type": "array"
+    },
+    "origin": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Joint centre in mm (assembly coordinates); empty = from the faces",
+      "title": "Origin"
+    },
+    "axis": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "Joint axis; empty = from the faces",
+      "title": "Axis"
+    },
+    "limits": {
+      "anyOf": [
+        {
+          "items": {
+            "type": "number"
+          },
+          "type": "array"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "description": "[min, max] in deg (revolute) or mm (prismatic)",
+      "title": "Limits"
+    }
+  },
+  "required": [
+    "id",
+    "parts"
+  ],
+  "title": "Mate",
+  "type": "object",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://newcad.dev/schemas/mate.schema.json",
+  "description": "A joint between two parts (or a part and 'ground'), one entry of `mates` in assembly.yaml. Its position is parts[1] relative to parts[0], zero as modelled. Units: mm, deg."
+}

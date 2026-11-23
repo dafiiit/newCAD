@@ -25,7 +25,7 @@ from typing import Any, Awaitable, Callable
 from . import devices
 
 log = logging.getLogger("newcad.jobs")
-Progress = Callable[[float, str], None]
+Progress = Callable[..., None]  # (fraction, stage, frame=None); frame: live body poses of a motion job
 
 
 class JobFailed(Exception):
@@ -120,7 +120,7 @@ class LocalTarget(Target):
                 if msg.get("done"):
                     final = msg
                 elif "progress" in msg:
-                    progress(float(msg["progress"]), str(msg.get("stage", "")))
+                    progress(float(msg["progress"]), str(msg.get("stage", "")), msg.get("frame"))
 
         reader = asyncio.create_task(read_out())
         stopper = asyncio.create_task(cancel.wait())
@@ -230,7 +230,7 @@ class RemoteTarget(Target):
 
                 st = await self._call(status)
                 if st["status"] == "running":
-                    progress(float(st.get("progress", 0)), f"{st.get('stage', '')} on {self.name}")
+                    progress(float(st.get("progress", 0)), f"{st.get('stage', '')} on {self.name}", st.get("frame"))
                 elif st["status"] == "failed":
                     raise JobFailed(st.get("error") or "The simulation failed on the compute node")
                 elif st["status"] == "done":
