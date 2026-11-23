@@ -139,12 +139,45 @@ def _tessellate(shape: Any, tolerance: float, angular: float) -> dict[str, Any]:
     }
 
 
+def _install_modules(modules: dict[str, str]) -> None:
+    """Make the project's shared modules (lib/<name>.py) importable as `<name>` or `lib.<name>`,
+    straight from memory: nothing is written to disk inside the sandbox."""
+    if not modules:
+        return
+    import importlib.abc
+    import importlib.util
+    import types
+
+    class Finder(importlib.abc.MetaPathFinder, importlib.abc.Loader):
+        def find_spec(self, fullname, path=None, target=None):  # noqa: ANN001
+            if fullname == "lib":
+                return importlib.util.spec_from_loader(fullname, self, is_package=True)
+            name = fullname[4:] if fullname.startswith("lib.") else fullname
+            if name in modules:
+                return importlib.util.spec_from_loader(fullname, self, origin=f"lib/{name}.py")
+            return None
+
+        def create_module(self, spec):  # noqa: ANN001
+            return None
+
+        def exec_module(self, module: types.ModuleType) -> None:
+            if module.__name__ == "lib":
+                module.__path__ = []
+                return
+            name = module.__name__[4:] if module.__name__.startswith("lib.") else module.__name__
+            module.__file__ = f"lib/{name}.py"
+            exec(compile(modules[name], module.__file__, "exec"), module.__dict__)  # noqa: S102
+
+    sys.meta_path.insert(0, Finder())
+
+
 def job_build(job: dict[str, Any]) -> dict[str, Any]:
     from build123d import export_brep
     from .glb import write_glb
 
     out = Path(job["out_dir"])
     t0 = time.perf_counter()
+    _install_modules(job.get("modules") or {})
     ns: dict[str, Any] = {"__name__": "__newcad_part__"}
     code = compile(job["source"], job.get("filename", "part.py"), "exec")
     exec(code, ns)  # noqa: S102 - this is the sandboxed worker's purpose
@@ -237,9 +270,15 @@ def main() -> None:
         res = JOBS[job["job"]](job)
     except BaseException as e:  # noqa: BLE001 - report every failure of generated code
         tb = traceback.extract_tb(e.__traceback__)
-        user = [f for f in tb if f.filename == job.get("filename", "part.py")]
-        line_no = user[-1].lineno if user else None
-        res = {"ok": False, "error": f"{type(e).__name__}: {e}", "line": line_no, "trace": traceback.format_exc(limit=6)[-2000:]}
+        mine = {job.get("filename", "part.py")} | {f"lib/{m}.py" for m in (job.get("modules") or {})}
+        user = [f for f in tb if f.filename in mine]
+        if not user and isinstance(e, SyntaxError) and e.filename in mine:
+            res = {"ok": False, "error": f"{type(e).__name__}: {e}", "line": e.lineno, "file": e.filename, "trace": traceback.format_exc(limit=6)[-2000:]}
+        else:
+            line_no = user[-1].lineno if user else None
+            res = {"ok": False, "error": f"{type(e).__name__}: {e}", "line": line_no, "trace": traceback.format_exc(limit=6)[-2000:]}
+            if user and user[-1].filename != job.get("filename", "part.py"):
+                res["file"] = user[-1].filename
     _send(res)
 
 

@@ -10,7 +10,7 @@ import { ivCurrent, openKeys, useApp, type AppActions, type AppState } from '../
 import { api, apiBlob, connectEvents, EngineError, probe, type EngineEvent } from './client';
 import { emptySim, loadStudies, onSimEvent, scheduleStudies } from './sim';
 import type {
-  BotGroup, BotStatus, BotTask, EngineChatMessage, EngineLog, EngineNote, EngineState, Manifest, ProjectSummary, Spec,
+  BotGroup, BotStatus, EngineMate, BotTask, EngineChatMessage, EngineLog, EngineNote, EngineState, Manifest, ProjectSummary, Spec,
 } from './types';
 
 type Get = () => AppState & AppActions;
@@ -177,14 +177,15 @@ async function loadModel() {
   const seq = ++buildSeq;
   patchEng({ building: true });
   try {
-    const [man, files] = await Promise.all([
+    const [man, files, asm] = await Promise.all([
       api<Manifest>(P('/build'), { method: 'POST', body: {} }),
       api<{ files: Record<string, string> }>(P('/files')),
+      api<{ mates: EngineMate[] }>(P('/assembly')),
     ]);
     if (seq !== buildSeq) return;
     const s = get();
     const ids = new Set(man.parts.map((p) => p.id));
-    patchEng({ manifest: man, files: files.files, building: false });
+    patchEng({ manifest: man, files: files.files, mates: asm.mates ?? [], building: false });
     if (s.selected && !ids.has(s.selected) && !s.selected.startsWith('lib-')) set({ selected: null });
   } catch (e) {
     if (seq === buildSeq) patchEng({ building: false });
@@ -206,9 +207,14 @@ async function loadNotes() {
 
 // ---------- chat and Bot ----------
 
-const mapMsg = (m: EngineChatMessage): ChatMessage => ({
-  who: m.who === 'you' ? 'you' : 'bot', text: m.text, ctx: m.ctx ?? null, actions: m.actions, branch: m.branch,
-});
+const mapMsg = (m: EngineChatMessage): ChatMessage => {
+  const interview = m.source === 'interview' || m.question !== undefined;
+  return {
+    who: m.who === 'you' ? 'you' : 'bot', text: m.text, ctx: m.ctx ?? null, actions: m.actions, branch: m.branch, t: m.t,
+    thread: m.thread ?? m.task ?? (m.group ? `g:${m.group}` : interview ? 'interview' : undefined),
+    source: m.source ?? (m.group ? 'generate' : interview ? 'interview' : undefined),
+  };
+};
 
 async function loadChat() {
   const log = await api<EngineChatMessage[]>(P('/bot/chat'));
@@ -270,7 +276,7 @@ export async function openProject(id: string) {
   lastOverview = null;
   cardIds.clear();
   set({
-    projectName: p.name, eng: { ...eng()!, pid: id, projects, manifest: null, log: null, files: {}, tasks: {}, keyOf: {}, qidOf: {}, cardAns: {}, compare: {}, sim: emptySim() },
+    projectName: p.name, eng: { ...eng()!, pid: id, projects, manifest: null, log: null, files: {}, tasks: {}, keyOf: {}, qidOf: {}, cardAns: {}, compare: {}, mates: [], sim: emptySim() },
     simSel: null, simPick: null, simProbe: null, simRange: null,
     iv: null, ahead: 0, agent: null, selected: null, pins: [], openPin: null, libParts: [], whatView: 'overview', typing: false,
     folders: [], floc: {}, cards: {}, ovFacts: [], ansDraft: {}, qMeta: {}, fups: {},
@@ -451,7 +457,8 @@ function engineActions(mock: AppActions): Partial<AppActions> {
       const s = get();
       const text = s.chatText.trim();
       if (!text) return;
-      if (s.activeChat !== 'live') { mock.sendChat(); return; }
+      // in a thread view, a message continues that conversation (and builds on its branch)
+      const thread = s.activeChat !== 'live' && !s.activeChat.startsWith('g:') && s.activeChat !== 'interview' ? s.activeChat : null;
       if (s.layer === 'home' || s.layer === 'team' || s.layer === 'settings') {
         set({ chatText: '' });
         const goal = text.replace(/^new project:\s*/i, '').trim();
@@ -478,7 +485,7 @@ function engineActions(mock: AppActions): Partial<AppActions> {
       }
       const sel = (s.layer === 'how' || s.layer === 'check') && s.selected && !s.selected.startsWith('lib-') ? s.selected : null;
       set({ chatText: '', typing: true, chatOpen: true });
-      api<BotTask>(P('/bot/chat'), { body: { message: text, selected: sel } }).then(onTask).catch(botProblem);
+      api<BotTask>(P('/bot/chat'), { body: { message: text, selected: sel, thread } }).then(onTask).catch(botProblem);
     },
 
     checkout: (id) => {
@@ -609,9 +616,9 @@ export async function compareCommit(shortId: string) {
   } catch { /* numbers are optional */ }
 }
 
-export async function savePart(part: string, code: string) {
+export async function savePart(part: string, code: string, module = false) {
   try {
-    const r = await api<{ commit: { short: string } | null; branch: string }>(P(`/parts/${encodeURIComponent(part)}`), { method: 'PUT', body: { code } });
+    const r = await api<{ commit: { short: string } | null; branch: string }>(P(`/${module ? 'lib' : 'parts'}/${encodeURIComponent(part)}`), { method: 'PUT', body: { code } });
     get().showToast(r.commit ? `Saved as ${r.commit.short} on ${r.branch}` : 'No changes');
     await Promise.all([loadLog(), loadModel()]);
   } catch (e) { fail(e, 'Could not save: '); }
@@ -657,7 +664,7 @@ export async function startEngineSync() {
   const mock: AppActions = { ...get() };
   const state: EngineState = {
     online: true, pid: null, projects: [], manifest: null, building: false, log: null, files: {}, bot: null,
-    tasks: {}, keyOf: {}, qidOf: {}, cardAns: {}, compare: {}, sim: emptySim(),
+    tasks: {}, keyOf: {}, qidOf: {}, cardAns: {}, compare: {}, mates: [], sim: emptySim(),
   };
   set({ eng: state, ...engineActions(mock) } as Partial<AppState>);
   connectEvents(onEvent, (up) => patchEng({ online: up }));

@@ -101,6 +101,9 @@ export interface EngineChatMessage {
   actions?: ('apply' | 'checkout' | 'history')[];
   question?: string | null;
   group?: string;
+  source?: 'chat' | 'comment' | 'generate' | 'interview';
+  note?: number;
+  thread?: string | null;
 }
 
 export interface BotTask {
@@ -274,5 +277,18 @@ export interface EngineState {
   /** card id → index of the answer in spec.yaml */
   cardAns: Record<number, { qid: string; idx: number }>;
   compare: Record<string, { mass_kg: number; ok: boolean }>;
+  /** joints between parts of the checked-out version (assembly.yaml) */
+  mates: EngineMate[];
   sim: SimState;
+}
+
+export interface EngineMate {
+  id: string;
+  type: 'fixed' | 'revolute' | 'slider' | 'cylindrical' | 'planar' | 'ball';
+  a: string;
+  b: string;
+  name?: string;
+  origin?: [number, number, number];
+  axis?: [number, number, number];
+  limits?: [number, number];
 }
