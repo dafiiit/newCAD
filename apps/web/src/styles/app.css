@@ -814,3 +814,29 @@ select.codefile{border:1px solid #ddd;border-radius:999px;padding:4px 10px;backg
 .app.dark .bcpick{border-color:#D9480F}
 .msg .msgthread{display:block;font-size:11px;margin-top:4px;opacity:.7}
 .msg.you .msgthread{margin-left:auto}
+
+/* Bot trace: reasoning and tool calls, live and under each reply */
+.msg.live{min-width:min(420px,85%)}
+.liverow{display:flex;align-items:center;gap:8px}
+.livelabel{flex:1;font-size:13px;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.stopbtn{display:inline-flex;align-items:center;gap:5px;padding:3px 10px;font-size:12px}
+.tracewait{font-size:12px;margin:6px 0 0}
+.tracebox{margin-top:6px;font-size:12px}
+.tracebox>summary{cursor:pointer;color:#666;list-style-position:inside}
+.trace{list-style:none;margin:6px 0 0;padding:0;display:flex;flex-direction:column;gap:4px;font-size:12px}
+.tr{display:flex;gap:6px;align-items:baseline;min-width:0}
+.trk{flex:none;font-size:10px;text-transform:uppercase;letter-spacing:.04em;color:#888;width:58px}
+.tr.think .trtext{font-style:italic;color:#555;white-space:pre-wrap}
+.tr.note .trtext{white-space:pre-wrap}
+.tr.tool>details{flex:1;min-width:0}
+.tr.tool summary{display:flex;align-items:center;gap:6px;cursor:pointer;list-style:none}
+.tr.tool summary::-webkit-details-marker{display:none}
+.trdot{width:7px;height:7px;border-radius:50%;background:#3a8f5c;flex:none}
+.trdot.running{background:#c99a2e;animation:trpulse 1s infinite alternate}
+.trdot.error{background:#c0392b}
+@keyframes trpulse{to{opacity:.3}}
+.trlabel{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.trname{font-size:11px;color:#888}
+.trms{font-size:11px;color:#999;flex:none}
+.trpre{margin:4px 0 2px 13px;padding:6px 8px;background:#e9e9e3;border-radius:6px;font-size:11px;white-space:pre-wrap;word-break:break-word;max-height:220px;overflow:auto}
+.trpre.err{background:#f6e3e0}

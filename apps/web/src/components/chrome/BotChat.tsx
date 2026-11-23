@@ -1,10 +1,11 @@
 import { useMemo } from 'react';
+import type { BotTask, TraceEvent } from '../../engine/types';
 import type { ChatMessage, ChatThread } from '../../data/types';
 import { CHAT_PROJECTS, MODES } from '../../data/seed';
 import { aheadStage, ivCurrent, openKeys, useApp } from '../../state/store';
 import { partNameOf } from '../../engine/model';
-import { applyBranch, checkoutRef, stopTasks } from '../../engine/sync';
-import { BotGlyph, ChevronRight, ChevronUp, CloseIcon, CollapseIcon, CubeIcon, ExpandIcon, ImageIcon, PlusIcon, SidebarIcon, ArrowRight, VideoIcon } from '../icons';
+import { applyBranch, checkoutRef, stopTask, stopTasks } from '../../engine/sync';
+import { BotGlyph, ChevronRight, ChevronUp, CloseIcon, CollapseIcon, CubeIcon, ExpandIcon, ImageIcon, PlusIcon, SidebarIcon, ArrowRight, StopIcon, VideoIcon } from '../icons';
 import { cx } from '../ui';
 
 /** Bottom chat bar on How?, Check and the pages. Expands into a panel, or full screen with chat history. */
@@ -20,6 +21,10 @@ export function ChatBar() {
   const activeThread = s.activeChat === 'live' ? null : (engThreads ?? s.chats).find((c) => c.id === s.activeChat);
   const msgs = activeThread ? activeThread.msgs : s.msgs;
   const full = s.chatOpen && s.chatFull;
+  const running: BotTask[] = s.eng
+    ? Object.values(s.eng.tasks).filter((t) => t.status === 'running' && t.project === s.eng!.pid && t.mode !== 'interview'
+      && (!activeThread || t.id === activeThread.id || t.thread === activeThread.id || (t.group && activeThread.id === `g:${t.group}`)))
+    : [];
 
   const ask = (text: string) => { set({ chatText: text }); setTimeout(() => useApp.getState().sendChat(), 0); };
   const engineChips: { label: string; go: () => void }[] = isPage
@@ -117,7 +122,19 @@ export function ChatBar() {
                 </button>
               </div>
               <div className="msgs">
-                {s.typing && <div className="msg bot"><p className="muted">thinking…</p></div>}
+                {running.map((t) => (
+                  <div key={t.id} className="msg bot live" aria-live="polite">
+                    <div className="liverow">
+                      <span className="bsdot busy" aria-hidden="true" />
+                      <span className="livelabel">{t.concept ? `Concept ${t.concept}: ` : ''}{t.label}{t.step ? ` · step ${t.step}` : ''}</span>
+                      <button className="pillbtn stopbtn" onClick={() => void stopTask(t.id)} disabled={t.label === 'Stopping'}>
+                        <StopIcon size={10} />{t.label === 'Stopping' ? 'Stopping…' : 'Stop'}
+                      </button>
+                    </div>
+                    <Trace events={t.trace ?? []} live />
+                  </div>
+                ))}
+                {s.typing && !running.length && <div className="msg bot"><p className="muted">thinking…</p></div>}
                 {msgs.slice().reverse().map((m, i) => (
                   <div key={msgs.length - i} className={cx('msg', m.who === 'you' ? 'you' : 'bot')}>
                     {(m.ctx || m.source === 'comment') && <span className="msgctx"><CubeIcon size={11} width={2} />{m.source === 'comment' ? `3D comment${m.ctx ? ` · ${m.ctx}` : ''}` : m.ctx}</span>}
@@ -125,6 +142,7 @@ export function ChatBar() {
                       <button className="linkbtn msgthread" onClick={() => set({ activeChat: m.thread!, chatFull: true, chatSide: true })}>Open conversation</button>
                     )}
                     <p>{m.text}</p>
+                    {m.who === 'bot' && !!m.trace?.length && <Trace events={m.trace} />}
                     {!!m.actions?.length && (
                       <div className="msgacts">
                         {m.actions.includes('apply') && m.branch && <button className="pillbtn dark" onClick={() => void applyBranch(m.branch!)}>Apply to {s.eng?.log?.headBranch ?? 'main'}</button>}
@@ -170,12 +188,48 @@ export function ChatBar() {
           <input aria-label="Chat with Bot" placeholder="Chat with Bot …" value={s.chatText}
             onChange={(e) => set({ chatText: e.target.value })} onFocus={() => set({ chatOpen: true })}
             onKeyDown={(e) => { if (e.key === 'Enter') sendChat(); if (e.key === 'Escape') set({ chatOpen: false }); }} />
-          {s.chatText.trim() && (
+          {s.chatText.trim() ? (
             <button className="send" aria-label="Send message" onClick={sendChat}><ArrowRight size={16} color="#fff" width={2.2} /></button>
-          )}
+          ) : live && s.agent ? (
+            <button className="send" aria-label="Stop Bot" title="Stop Bot" onClick={() => void stopTasks()}><StopIcon size={14} color="#fff" /></button>
+          ) : null}
         </div>
       </div>
     </>
+  );
+}
+
+/** What the Bot thought and did: reasoning, notes between tool calls, and every tool call with its arguments and result. */
+function Trace({ events, live = false }: { events: TraceEvent[]; live?: boolean }) {
+  if (!events.length) return live ? <p className="muted tracewait">Waiting for the model…</p> : null;
+  const tools = events.filter((e) => e.kind === 'tool').length;
+  const items = events.map((e, i) => <TraceItem key={i} e={e} />);
+  if (live) return <ol className="trace">{items.slice(-12)}</ol>;
+  return (
+    <details className="tracebox">
+      <summary>{tools ? `${tools} tool call${tools === 1 ? '' : 's'}` : 'Reasoning'}{events.some((e) => e.kind === 'thinking') && tools ? ' and reasoning' : ''}</summary>
+      <ol className="trace">{items}</ol>
+    </details>
+  );
+}
+
+function TraceItem({ e }: { e: TraceEvent }) {
+  if (e.kind === 'thinking') return <li className="tr think"><span className="trk">Thought</span><span className="trtext">{e.text}</span></li>;
+  if (e.kind === 'text') return <li className="tr note"><span className="trk">Note</span><span className="trtext">{e.text}</span></li>;
+  const args = e.args && Object.keys(e.args).length ? JSON.stringify(e.args, null, 1) : '';
+  return (
+    <li className={cx('tr tool', e.status)}>
+      <details>
+        <summary>
+          <span className={cx('trdot', e.status)} aria-label={e.status === 'error' ? 'failed' : e.status === 'running' ? 'running' : 'done'} />
+          <span className="trlabel">{e.label || e.tool}</span>
+          <code className="trname">{e.tool}</code>
+          {e.ms !== undefined && <span className="trms">{e.ms < 1000 ? `${e.ms} ms` : `${(e.ms / 1000).toFixed(1)} s`}</span>}
+        </summary>
+        {args && <pre className="trpre">{args}</pre>}
+        {e.result && <pre className={cx('trpre', e.status === 'error' && 'err')}>{e.result}{e.images ? `\n(+${e.images} image${e.images === 1 ? '' : 's'})` : ''}</pre>}
+      </details>
+    </li>
   );
 }
 

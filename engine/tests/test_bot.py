@@ -104,6 +104,59 @@ async def test_bot_branches_off_and_reports_every_branch(engine):
     assert "I also tried bot/thinner-plate" in msgs[-1]["text"] and msgs[-1]["task"] == t.id
 
 
+async def test_trace_shows_reasoning_text_and_tool_calls(engine):
+    p = engine.store.create("Trace", template="demo")
+
+    def script(text, ctx):
+        yield Turn("Reading the plate first.", [call("code_read_file", path="parts/plate.py")], "tool", thinking="The plate is the base part.")
+        yield Turn("", [call("geometry_patch_part", part="plate", find="nope", replace="x")], "tool")
+        yield Turn("Nothing to change.", [], "end")
+    engine.bot.script = script
+    try:
+        t = await engine.bot.wait(engine.bot.start_change(p.id, "look at the plate").id)
+    finally:
+        engine.bot.script = None
+    kinds = [e["kind"] for e in t.trace]
+    assert kinds == ["thinking", "text", "tool", "tool"], kinds
+    assert t.trace[0]["text"] == "The plate is the base part."
+    assert t.trace[2]["tool"] == "code_read_file" and t.trace[2]["status"] == "ok" and "Box(" in t.trace[2]["result"]
+    assert t.trace[3]["status"] == "error"
+    reply = engine.bot.chat(p.id)[-1]
+    assert reply["task"] == t.id and [e["kind"] for e in reply["trace"]] == kinds and reply["status"] == "done"
+
+
+async def test_stop_interrupts_a_slow_model_call(engine):
+    import asyncio
+    p = engine.store.create("Slow", template="demo")
+    started = asyncio.Event()
+
+    class Slow:
+        async def send_user(self, text):
+            return Turn("", [call("geometry_patch_part", part="plate", find="Box(220", replace="Box(200")], "tool")
+
+        async def send_tool_results(self, outputs):
+            started.set()
+            await asyncio.sleep(60)  # a local model thinking for a long time
+            return Turn("late", [], "end")
+    engine.bot._conv_factory = lambda pid, system: (lambda specs: Slow())
+    try:
+        t = engine.bot.start_change(p.id, "shorter plate")
+        await asyncio.wait_for(started.wait(), 10)
+        engine.bot.stop(t.id)
+        t = await engine.bot.wait(t.id, timeout=10)
+    finally:
+        del engine.bot._conv_factory
+    assert t.status == "stopped" and t.problem == "Stopped by you"
+    assert t.branch and "Box(200" in p.read("parts/plate.py", t.branch)  # the work so far is kept on its branch
+
+
+async def test_reasoning_is_split_from_openai_compatible_replies():
+    from newcad_engine.agent.adapters.openai_adapter import split_reasoning
+    assert split_reasoning(NS(content="<think>plan it</think>Done.")) == ("Done.", "plan it")
+    assert split_reasoning(NS(content="Done.", reasoning_content="from the field")) == ("Done.", "from the field")
+    assert split_reasoning(NS(content="Plain")) == ("Plain", "")
+
+
 async def test_apply_bot_branch_by_merge(engine):
     p = engine.store.create("Apply", template="demo")
     t = await engine.bot.wait(engine.bot.start_change(p.id, "make a bracket").id)
@@ -158,16 +211,17 @@ def a_resp(content, stop="tool_use"):
 
 async def test_anthropic_adapter_request_shape_and_tool_round_trip():
     tool_use = NS(type="tool_use", id="tu_1", name="view_snapshot", input={"view": "iso"})
-    thinking = NS(type="thinking", thinking="", signature="sig")
+    thinking = NS(type="thinking", thinking="Check the view first.", signature="sig")
     fake = FakeAnthropic([a_resp([thinking, tool_use]), a_resp([NS(type="text", text="Looks good.")], "end_turn")])
     conv = AnthropicConversation("sys", TOOLS, "", {"client": fake, "effort": "high"})
     t = await conv.send_user("Build it")
     assert t.stop == "tool" and t.calls == [ToolCall("tu_1", "view_snapshot", {"view": "iso"})]
+    assert t.thinking == "Check the view first."
     first = fake.calls[0]
     assert first["model"] == "claude-opus-5-5" and first["output_config"] == {"effort": "high"}
     assert first["betas"] == ["server-side-fallback-2026-07-01"] and first["fallbacks"] == "default"
     assert first["tools"][0]["input_schema"]["properties"]["view"]["type"] == "string"
-    assert "thinking" not in first and "temperature" not in first
+    assert first["thinking"] == {"type": "adaptive", "display": "summarized"} and "temperature" not in first
     t = await conv.send_tool_results([ToolOutput("tu_1", "iso view", [b"\x89PNG fake"])])
     assert t.stop == "end" and t.text == "Looks good."
     msgs = fake.calls[1]["messages"]

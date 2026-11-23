@@ -6,7 +6,7 @@ import json
 import logging
 import secrets
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
 from ..project import spec as S
@@ -48,12 +48,28 @@ class BotTask:
     mass_kg: float | None = None
     builds: bool | None = None
     branches: list[str] = field(default_factory=list)
+    trace: list[dict[str, Any]] = field(default_factory=list)  # reasoning, text and tool calls, live
     stop_requested: bool = False
+    stop_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     def to_json(self) -> dict[str, Any]:
-        d = asdict(self)
-        d.pop("stop_requested")
-        return d
+        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ("stop_requested", "stop_event")}
+        d["trace"] = self.trace[-TRACE_KEEP:]
+        return json.loads(json.dumps(d, default=str))
+
+    def trace_brief(self) -> list[dict[str, Any]]:
+        """A shorter copy of the trace kept with the Bot's reply in the chat log."""
+        out = []
+        for ev in self.trace[-TRACE_KEEP:]:
+            ev = dict(ev)
+            for k, n in (("text", 1500), ("result", 400)):
+                if isinstance(ev.get(k), str) and len(ev[k]) > n:
+                    ev[k] = ev[k][:n] + "…"
+            out.append(ev)
+        return out
+
+
+TRACE_KEEP = 150
 
 
 class BotManager:
@@ -163,7 +179,8 @@ class BotManager:
         res = await run_loop(self.engine, project=t.project, branch=t.branch, task_id=t.id,
                              conv_factory=self._conv_factory(t.project, system), prompt=prompt,
                              max_steps=t.max_steps, max_tokens=int(settings.get("max_tokens", 600_000)),
-                             on_step=on_step, should_stop=lambda: t.stop_requested)
+                             on_step=on_step, should_stop=lambda: t.stop_requested, stop_event=t.stop_event,
+                             trace=t.trace, on_trace=lambda: self._emit(t))
         t.calls, t.tokens, t.reply, t.problem = res.calls, res.tokens, res.text, res.problem
         t.status = res.status
         first = t.branch
@@ -203,7 +220,7 @@ class BotManager:
             if others:
                 text += f" I also tried {', '.join(others)}; you'll find {'them' if len(others) > 1 else 'it'} in the version history."
         self.say(t.project, "bot", text.strip() or "Done.", task=t.id, thread=t.thread, branch=t.branch or None, source="comment" if t.mode == "comment" else "chat",
-                 actions=["apply", "checkout"] if t.branch and t.commits else [])
+                 actions=["apply", "checkout"] if t.branch and t.commits else [], trace=t.trace_brief(), status=t.status)
 
     def _bot_branch(self, pid: str, name: str, from_ref: str | None = None) -> tuple[str, str]:
         p = self.engine.store.get(pid)
@@ -348,7 +365,8 @@ class BotManager:
 
             res = await run_loop(self.engine, project=pid, branch=head, task_id=t.id, conv_factory=self._conv_factory(pid, system),
                                  prompt=prompt, allowed=INTERVIEW_TOOLS, local_tools={"ask_user": (spec_tool, ask_user)},
-                                 max_steps=10, max_tokens=150_000, on_step=on_step, should_stop=lambda: "question_id" in asked or t.stop_requested)
+                                 max_steps=10, max_tokens=150_000, on_step=on_step, should_stop=lambda: "question_id" in asked or t.stop_requested,
+                                 stop_event=t.stop_event, trace=t.trace, on_trace=lambda: self._emit(t))
             t.status = "failed" if res.status == "failed" and "question_id" not in asked else "done"
             t.problem, t.tokens, t.calls, t.finished = res.problem if t.status == "failed" else "", res.tokens, res.calls, time.time()
             self._emit(t)
@@ -379,6 +397,10 @@ class BotManager:
         if not t:
             raise StoreError("No such task")
         t.stop_requested = True
+        t.stop_event.set()
+        if t.status == "running":
+            t.label = "Stopping"
+            self._emit(t)
         return t
 
     def list(self, pid: str | None = None) -> list[dict[str, Any]]:

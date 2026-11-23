@@ -211,6 +211,7 @@ const mapMsg = (m: EngineChatMessage): ChatMessage => {
   const interview = m.source === 'interview' || m.question !== undefined;
   return {
     who: m.who === 'you' ? 'you' : 'bot', text: m.text, ctx: m.ctx ?? null, actions: m.actions, branch: m.branch, t: m.t,
+    task: m.task, trace: m.trace, status: m.status,
     thread: m.thread ?? m.task ?? (m.group ? `g:${m.group}` : interview ? 'interview' : undefined),
     source: m.source ?? (m.group ? 'generate' : interview ? 'interview' : undefined),
   };
@@ -638,6 +639,10 @@ export async function exportModel(format: 'step' | 'stl') {
 
 export async function setNoteResolved(id: number, resolved: boolean) {
   try { await api(P(`/notes/${id}/state`), { body: { resolved } }); await loadNotes(); } catch (e) { fail(e); }
+}
+
+export async function stopTask(id: string) {
+  try { onTask(await api<BotTask>(`/api/bot/tasks/${id}/stop`, { method: 'POST', body: {} })); } catch (e) { fail(e); }
 }
 
 export async function stopTasks() {

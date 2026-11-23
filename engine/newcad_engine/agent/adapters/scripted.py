@@ -6,6 +6,8 @@ It is only selectable when NEWCAD_ALLOW_SCRIPTED=1 is set.
 """
 from __future__ import annotations
 
+import asyncio
+import os
 import re
 from typing import Any, Callable, Generator
 
@@ -23,11 +25,19 @@ class ScriptedConversation(Conversation):
 
     async def send_user(self, text: str) -> Turn:
         self.gen = self.script(text, {"system": self.system, "tools": [t.name for t in self.tools]})
+        await self._pause()
         return self._next(None)
 
     async def send_tool_results(self, outputs: list[ToolOutput]) -> Turn:
         self.seen.append(outputs)
+        await self._pause()
         return self._next(outputs)
+
+    async def _pause(self) -> None:
+        # NEWCAD_SCRIPTED_DELAY=<seconds> makes each turn slow, like a local model, for UI checks of the live trace
+        delay = float(os.environ.get("NEWCAD_SCRIPTED_DELAY") or 0)
+        if delay:
+            await asyncio.sleep(delay)
 
     def _next(self, outputs: list[ToolOutput] | None) -> Turn:
         assert self.gen is not None
@@ -87,7 +97,7 @@ def demo_script(text: str, ctx: dict[str, Any]) -> Generator[Turn, list[ToolOutp
     t, t2, rib = variant
     ribs = RIBS.format(r=rib[0], h=rib[1]) if rib else ""
     code = BRACKET.format(label=label, t=t, t2=t2, ribs=ribs, extra_doc=", ribs" if rib else "")
-    yield Turn("Reading the spec.", [call("spec_read")], "tool")
+    yield Turn("Reading the spec.", [call("spec_read")], "tool", thinking=f"The {label.lower()} needs a plate and an upright; first I check what the spec asks for.")
     out = yield Turn(f"Writing the {label.lower()}.", [call("geometry_write_part", part="bracket", code=code, name="Bracket", material="Aluminium", color="#B4C2D6")], "tool")
     out = yield Turn("", [call("geometry_rebuild")], "tool")
     ok = "FAILED" not in out[0].text

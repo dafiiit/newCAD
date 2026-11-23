@@ -104,6 +104,22 @@ export interface EngineChatMessage {
   source?: 'chat' | 'comment' | 'generate' | 'interview';
   note?: number;
   thread?: string | null;
+  trace?: TraceEvent[];
+  status?: BotTask['status'];
+}
+
+/** One step the Bot took: its reasoning, text it wrote between tool calls, or a tool call with its result. */
+export interface TraceEvent {
+  kind: 'thinking' | 'text' | 'tool';
+  t: number;
+  text?: string;
+  tool?: string;
+  label?: string;
+  args?: Record<string, unknown>;
+  status?: 'running' | 'ok' | 'error';
+  ms?: number;
+  result?: string;
+  images?: number;
 }
 
 export interface BotTask {
@@ -122,6 +138,8 @@ export interface BotTask {
   concept: string | null;
   mass_kg: number | null;
   builds: boolean | null;
+  thread?: string | null;
+  trace?: TraceEvent[];
 }
 
 export interface BotGroup { id: string; project: string; status: 'running' | 'done' | 'failed'; tasks: BotTask[] }

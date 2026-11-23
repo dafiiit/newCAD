@@ -91,6 +91,10 @@ export interface ChatMessage {
   thread?: string;
   source?: 'chat' | 'comment' | 'generate' | 'interview';
   t?: number;
+  /** Engine mode: the Bot task behind the message, and for a Bot reply the steps it took to get there. */
+  task?: string;
+  trace?: import('../engine/types').TraceEvent[];
+  status?: 'running' | 'done' | 'failed' | 'stopped';
 }
 
 export interface ChatThread {
