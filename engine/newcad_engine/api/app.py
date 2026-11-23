@@ -112,6 +112,7 @@ class NoteState(BaseModel):
 class Chat(BaseModel):
     message: str = Field(min_length=1, max_length=8000)
     selected: str | None = None
+    thread: str | None = None  # continue this conversation (a task id): build on its branch, keep the messages together
 
 
 class Generate(BaseModel):
@@ -303,11 +304,28 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         s["staged"] = sorted(p.staged(None)) if p.head_branch() else []
         return s
 
+    @app.get("/api/projects/{pid}/assembly")
+    async def assembly(pid: str, ref: str | None = None) -> dict[str, Any]:
+        a = proj(pid).assembly(ref)
+        from ..sim.motion.model import public_mate
+        return {"parts": a.get("parts", []), "mates": [public_mate(m) for m in a.get("mates") or []]}
+
     @app.get("/api/projects/{pid}/files")
     async def files(pid: str, ref: str | None = None) -> dict[str, Any]:
         p = proj(pid)
         c = p.resolve(ref)
         return {"ref": ref or p.head_ref(), "commit": str(c.id), "files": p.files(ref)}
+
+    @app.put("/api/projects/{pid}/lib/{name}")
+    async def save_module(pid: str, name: str, body: PartCode) -> dict[str, Any]:
+        """A shared module (lib/<name>.py) edited in the Code panel: one commit by the user."""
+        from ..project.store import valid_part_id
+        valid_part_id(name)
+        p = proj(pid)
+        b = p._branch_for_write(body.branch)
+        info = p.commit(b, body.message or f"Edit lib/{name}.py in code", YOU,
+                        changes={f"lib/{name}.py": body.code if body.code.endswith("\n") else body.code + "\n"}, include_staged=False)
+        return {"commit": info.to_json() if info else None, "branch": b}
 
     @app.put("/api/projects/{pid}/parts/{part}")
     async def save_part(pid: str, part: str, body: PartCode) -> dict[str, Any]:
@@ -534,7 +552,7 @@ def create_app(engine: Engine | None = None) -> FastAPI:
 
     @app.post("/api/projects/{pid}/bot/chat")
     async def chat(pid: str, body: Chat) -> dict[str, Any]:
-        return eng.bot.start_change(pid, body.message, body.selected).to_json()
+        return eng.bot.start_change(pid, body.message, body.selected, thread=body.thread).to_json()
 
     @app.post("/api/projects/{pid}/bot/generate")
     async def generate(pid: str, body: Generate) -> dict[str, Any]:

@@ -103,12 +103,13 @@ class SimService:
 
     def _prepare_motion(self, p: Project, study: St.Study, man: dict[str, Any], metas: dict[str, Any], ref: str | None) -> dict[str, Any]:
         geo = self.engine.geometry
-        mates = MM.mates_from(_assembly(p, ref))
+        asm = _assembly(p, ref)
+        mates = MM.mates_from(asm)
         try:
             mech = mechanism(study, man, metas, mates)
         except MotionProblem as e:
             raise StoreError(str(e)) from None
-        warnings = mech.pop("warnings")
+        warnings = MM.unsupported_mates(asm) + mech.pop("warnings")
         inputs = {"version": f"{St.SIM_VERSION}.{MOTION_VERSION}", "study": study.id, "name": study.name, "type": "motion",
                   "mechanism": mech, "warnings": warnings}
         breps = {b["id"]: str(geo.entry(b["key"]) / "part.brep") for b in mech["bodies"]} if mech["settings"]["contacts"] else {}

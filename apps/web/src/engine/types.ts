@@ -101,6 +101,9 @@ export interface EngineChatMessage {
   actions?: ('apply' | 'checkout' | 'history')[];
   question?: string | null;
   group?: string;
+  source?: 'chat' | 'comment' | 'generate' | 'interview';
+  note?: number;
+  thread?: string | null;
 }
 
 export interface BotTask {
@@ -239,7 +242,7 @@ export interface MotionSetup {
 }
 
 /** A mate (joint) from assembly.yaml, with its centre and axis as the engine resolves them from the picked faces. */
-export interface EngineMate {
+export interface MotionMate {
   id: string;
   type: MateType;
   parts: [string, string];
@@ -337,7 +340,7 @@ export interface SimState {
   jobs: Record<string, EngineJob>;
   targets: EngineTarget[] | null;
   materials: Material[];
-  mates: EngineMate[];
+  mates: MotionMate[];
   loaded: boolean;
 }
 
@@ -358,5 +361,18 @@ export interface EngineState {
   /** card id → index of the answer in spec.yaml */
   cardAns: Record<number, { qid: string; idx: number }>;
   compare: Record<string, { mass_kg: number; ok: boolean }>;
+  /** joints between parts of the checked-out version (assembly.yaml) */
+  mates: EngineMate[];
   sim: SimState;
+}
+
+export interface EngineMate {
+  id: string;
+  type: 'fixed' | 'revolute' | 'slider' | 'cylindrical' | 'planar' | 'ball';
+  a: string;
+  b: string;
+  name?: string;
+  origin?: [number, number, number];
+  axis?: [number, number, number];
+  limits?: [number, number];
 }

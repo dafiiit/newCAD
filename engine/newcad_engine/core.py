@@ -6,7 +6,7 @@ import contextvars
 import json
 import logging
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from .config import Config
@@ -17,7 +17,7 @@ from .project.store import BOT, ProjectStore, StoreError
 log = logging.getLogger("newcad")
 
 
-@dataclass(frozen=True)
+@dataclass
 class Actor:
     """Who is calling the tools. BuilderBot runs with a guard that pins it to one project and branch."""
     name: str
@@ -25,6 +25,7 @@ class Actor:
     project: str | None = None  # guard: only this project
     branch: str | None = None   # guard: only write this branch
     task: str | None = None
+    owned: list[str] = field(default_factory=list)  # guard: branches this task may write (it starts with one, can create more)
 
     @property
     def author(self) -> tuple[str, str]:
@@ -40,7 +41,7 @@ current_actor: contextvars.ContextVar[Actor] = contextvars.ContextVar("newcad_ac
 
 
 def bot_actor(project: str, branch: str, task: str) -> Actor:
-    return Actor(BOT[0], BOT[1], project=project, branch=branch, task=task)
+    return Actor(BOT[0], BOT[1], project=project, branch=branch, task=task, owned=[branch])
 
 
 class EventBus:

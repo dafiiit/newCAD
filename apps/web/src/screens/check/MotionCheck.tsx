@@ -11,7 +11,7 @@ import {
   addMate, deleteStudy, DRIVER_LABEL, driverUnit, loadSeries, MATE_LABEL, patchMotion, removeMate, retryJob, runStudy, springUnit,
   sweepPeak, targetName, useBearingLoad,
 } from '../../engine/sim';
-import type { DriverKind, EngineMate, EngineStudy, MateType, MotionSeries, MotionSetup, StudySummary } from '../../engine/types';
+import type { DriverKind, MotionMate, EngineStudy, MateType, MotionSeries, MotionSetup, StudySummary } from '../../engine/types';
 import { useApp, type MatePick } from '../../state/store';
 import { fmt, JobProgress, NumIn, studyView } from './EngineCheck';
 import { clock } from './MotionAssembly';
@@ -77,7 +77,7 @@ export function MotionDetail({ st }: { st: EngineStudy }) {
   );
 }
 
-function MateRow({ mate, names }: { mate: EngineMate; names: Record<string, string> }) {
+function MateRow({ mate, names }: { mate: MotionMate; names: Record<string, string> }) {
   const where = mate.origin_mm ? ` · at ${mate.origin_mm.map((x) => Number(x.toFixed(1))).join(', ')} mm` : '';
   return (
     <div className="bcrow">
@@ -120,9 +120,9 @@ function MatePickCard({ pick, names }: { pick: MatePick; names: Record<string, s
   );
 }
 
-const drivable = (j: EngineMate) => j.type === 'revolute' || j.type === 'prismatic';
+const drivable = (j: MotionMate) => j.type === 'revolute' || j.type === 'prismatic';
 
-function Drivers({ st, m, mates, names }: { st: EngineStudy; m: MotionSetup; mates: EngineMate[]; names: Record<string, string> }) {
+function Drivers({ st, m, mates, names }: { st: EngineStudy; m: MotionSetup; mates: MotionMate[]; names: Record<string, string> }) {
   const byId = Object.fromEntries(mates.map((j) => [j.id, j]));
   const free = mates.filter((j) => drivable(j) && !m.drivers.some((d) => d.mate === j.id));
   const set = (drivers: MotionSetup['drivers']) => patchMotion(st.id, { drivers });
@@ -162,7 +162,7 @@ function Drivers({ st, m, mates, names }: { st: EngineStudy; m: MotionSetup; mat
   );
 }
 
-function Springs({ st, m, mates }: { st: EngineStudy; m: MotionSetup; mates: EngineMate[] }) {
+function Springs({ st, m, mates }: { st: EngineStudy; m: MotionSetup; mates: MotionMate[] }) {
   const byId = Object.fromEntries(mates.map((j) => [j.id, j]));
   const free = mates.filter((j) => drivable(j) && !m.springs.some((x) => x.mate === j.id));
   const set = (springs: MotionSetup['springs']) => patchMotion(st.id, { springs });
@@ -214,7 +214,7 @@ function Settings({ st, m }: { st: EngineStudy; m: MotionSetup }) {
   );
 }
 
-function sweepOptions(m: MotionSetup, mates: EngineMate[], parts: { id: string; name: string }[]) {
+function sweepOptions(m: MotionSetup, mates: MotionMate[], parts: { id: string; name: string }[]) {
   const byId = Object.fromEntries(mates.map((j) => [j.id, j]));
   const o: { key: string; label: string; unit: string }[] = [];
   for (const d of m.drivers) o.push({ key: `drivers.${d.mate}.value`, label: `${DRIVER_LABEL[d.kind]}: ${byId[d.mate]?.label || d.mate}`, unit: driverUnit(d.kind, byId[d.mate]?.type) });
@@ -227,7 +227,7 @@ function sweepOptions(m: MotionSetup, mates: EngineMate[], parts: { id: string; 
   return o;
 }
 
-function Sweep({ st, m, mates, parts }: { st: EngineStudy; m: MotionSetup; mates: EngineMate[]; parts: { id: string; name: string }[] }) {
+function Sweep({ st, m, mates, parts }: { st: EngineStudy; m: MotionSetup; mates: MotionMate[]; parts: { id: string; name: string }[] }) {
   const opts = sweepOptions(m, mates, parts);
   const sw = m.sweep;
   const [txt, setTxt] = useState(sw ? sw.values.join(', ') : '');

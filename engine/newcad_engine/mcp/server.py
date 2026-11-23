@@ -21,7 +21,7 @@ from pydantic import Field
 from ..core import current_actor
 from ..geometry.facetags import rematch
 from ..project import spec as S
-from ..project.store import Project, StoreError, valid_part_id
+from ..project.store import Project, StoreError, slugify, valid_part_id
 from ..project.templates import PART_HEADER, dump
 
 INSTRUCTIONS = """NewCAD is a CAD tool where designs are build123d Python scripts stored in a git repository per project.
@@ -36,6 +36,7 @@ INSTRUCTIONS = """NewCAD is a CAD tool where designs are build123d Python script
 ReadRef = Annotated[str | None, Field(description="Branch name or commit id to read. Default: the user's current version (HEAD).")]
 WriteBranch = Annotated[str | None, Field(description="Branch to change. Default: the branch the user has checked out.")]
 ProjectId = Annotated[str, Field(description="Project id from project_list.")]
+Vec3 = Annotated[list[float], Field(min_length=3, max_length=3, description="[x, y, z] in mm (assembly coordinates, Z up)")]
 StudyId = Annotated[str, Field(description="Study id from sim_list_studies")]
 
 
@@ -71,9 +72,11 @@ def build_mcp(engine: Any) -> MCPServer:
         """Branch a write goes to. A guarded actor (BuilderBot) can only write its own branch."""
         a = current_actor.get()
         if a.guarded:
-            if branch not in (None, "HEAD", a.branch):
-                raise StoreError(f"You can only change branch {a.branch} in this task")
-            return a.branch  # type: ignore[return-value]
+            if branch in (None, "HEAD", a.branch):
+                return a.branch  # type: ignore[return-value]
+            if branch in a.owned:
+                return branch
+            raise StoreError(f"You can only change your own branches in this task: {', '.join(a.owned)}")
         return p._branch_for_write(branch)
 
     def rref(p: Project, ref: str | None) -> str | None:
@@ -106,7 +109,8 @@ def build_mcp(engine: Any) -> MCPServer:
                 mn, mx = r["bbox"]["min"], r["bbox"]["max"]
                 lines.append(f"- {r['id']} OK: {r['mass_kg']:.3f} kg {r['material']}, bbox [{', '.join(f'{v:.1f}' for v in mn)}] to [{', '.join(f'{v:.1f}' for v in mx)}], {r['faces']} faces")
             else:
-                where = f" (line {r['line']})" if r.get("line") else ""
+                ef = r.get("errorFile")
+                where = (f" ({ef} line {r['line']})" if ef and ef != r["file"] else f" (line {r['line']})") if r.get("line") else ""
                 lines.append(f"- {r['id']} FAILED{where}: {r['error']}")
                 if r.get("log", "").strip():
                     lines.append("  log: " + r["log"].strip()[-600:].replace("\n", "\n  "))
@@ -153,12 +157,35 @@ def build_mcp(engine: Any) -> MCPServer:
     @tool("project_create_branch")
     async def project_create_branch(project: ProjectId, name: Annotated[str, Field(description="New branch name, e.g. concept-d")],
                                     from_ref: ReadRef = None) -> str:
-        """Create a branch (a concept) from a version without switching to it."""
-        if current_actor.get().guarded:
-            raise StoreError("A Bot task works on its own branch and can't create others")
+        """Create a branch (a concept) from a version. BuilderBot: the new branch is named bot/<name>, starts from your
+        current branch unless from_ref is given, and becomes the branch you work on (go back with project_switch_branch)."""
+        a = current_actor.get()
         p = proj(project)
+        if a.guarded:
+            base = from_ref or a.branch
+            if a.branch and p.staged(a.branch):
+                p.commit(a.branch, "Bot: work in progress", a.author)
+            nm = name if name.startswith("bot/") else f"bot/{slugify(name, 'variant')[:30]}"
+            b = p.create_branch(nm, base, unique=True)
+            a.owned.append(b)
+            a.branch = b
+            return f"Created branch {b} from {base} at {str(p.resolve(b).id)[:7]}. You now work on {b}. Your branches: {', '.join(a.owned)}."
         b = p.create_branch(name, from_ref)
         return f"Created branch {b} at {str(p.resolve(b).id)[:7]}"
+
+    @tool("project_switch_branch")
+    async def project_switch_branch(project: ProjectId, to: Annotated[str, Field(description="One of the branches this task created or started on")]) -> str:
+        """BuilderBot only: switch which of your own branches your edits go to. Staged edits on the current branch are committed first."""
+        a = current_actor.get()
+        p = proj(project)
+        if not a.guarded:
+            raise StoreError("Only for Bot tasks. To change the user's view use project_checkout.")
+        if to not in a.owned:
+            raise StoreError(f"You can only switch between your branches: {', '.join(a.owned)}")
+        if a.branch and p.staged(a.branch):
+            p.commit(a.branch, "Bot: work in progress", a.author)
+        a.branch = to
+        return f"You now work on {to}."
 
     @tool("project_commit")
     async def project_commit(project: ProjectId, message: Annotated[str, Field(description="What changed and why, one line")],
@@ -305,6 +332,173 @@ def build_mcp(engine: Any) -> MCPServer:
         asm["parts"] = [x for x in asm["parts"] if x["id"] != part]
         p.stage(b, {e.get("file") or f"parts/{part}.py": None, "assembly.yaml": dump(asm)})
         return f"Removed {part} on {b} (staged)."
+
+    # ---------- code.* (every file of the project) ----------
+
+    def code_path(path: str) -> str:
+        path = path.strip().lstrip("/")
+        if path.startswith(("parts/", "lib/")) and path.endswith(".py") and path.count("/") == 1 and valid_module(path.split("/")[1][:-3]):
+            return path
+        raise StoreError("Editable code files are parts/<id>.py and lib/<name>.py (lower-case letters, digits, _)")
+
+    def valid_module(name: str) -> bool:
+        try:
+            valid_part_id(name)
+            return True
+        except StoreError:
+            return False
+
+    @tool("code_list_files", read_only=True)
+    async def code_list_files(project: ProjectId, ref: ReadRef = None) -> str:
+        """List every file of the project with its size: part scripts, shared modules (lib/), assembly.yaml, spec.yaml, notes and studies."""
+        p = proj(project)
+        files = p.files(rref(p, ref))
+        lines = [f"{path}  ({src.count(chr(10)) + 1} lines)" for path, src in sorted(files.items())]
+        return "\n".join(lines) + "\n\nPart scripts can import shared modules: `from params import *` imports lib/params.py."
+
+    @tool("code_read_file", read_only=True)
+    async def code_read_file(project: ProjectId, path: Annotated[str, Field(description="File path, e.g. parts/plate.py, lib/params.py or assembly.yaml")],
+                             ref: ReadRef = None) -> str:
+        """Read any file of the project."""
+        p = proj(project)
+        src = p.read(path.strip().lstrip("/"), rref(p, ref))
+        if src is None:
+            raise StoreError(f"No file {path}. Use code_list_files.")
+        return src
+
+    @tool("code_write_module")
+    async def code_write_module(project: ProjectId,
+                                module: Annotated[str, Field(description="Module name: lower-case letters, digits, _ (e.g. params)")],
+                                code: Annotated[str, Field(description="Complete Python source of lib/<module>.py")],
+                                branch: WriteBranch = None) -> str:
+        """Create or replace a shared module lib/<module>.py (staged). Part scripts import it with `from <module> import *`.
+        Use it for dimensions or helper functions that several parts share, so one edit changes all of them."""
+        p = proj(project)
+        b = wbranch(p, branch)
+        valid_part_id(module)
+        p.stage(b, {f"lib/{module}.py": code if code.endswith("\n") else code + "\n"})
+        return f"Staged lib/{module}.py on {b}. Run geometry_rebuild to rebuild the parts that use it."
+
+    @tool("code_patch_file")
+    async def code_patch_file(project: ProjectId,
+                              path: Annotated[str, Field(description="parts/<id>.py or lib/<name>.py")],
+                              find: Annotated[str, Field(description="Exact text to replace; must occur once")],
+                              replace: str, branch: WriteBranch = None) -> str:
+        """Replace one exact snippet in a part script or shared module (staged)."""
+        p = proj(project)
+        b = wbranch(p, branch)
+        path = code_path(path)
+        src = p.read(path, b)
+        if src is None:
+            raise StoreError(f"No file {path} on {b}")
+        n = src.count(find)
+        if n != 1:
+            raise StoreError(f"`find` occurs {n} times in {path}; it must occur exactly once. Read the file and use a longer snippet.")
+        p.stage(b, {path: src.replace(find, replace)})
+        return f"Patched {path} on {b}. Run geometry_rebuild to check it."
+
+    @tool("code_remove_module", destructive=True)
+    async def code_remove_module(project: ProjectId, module: str, branch: WriteBranch = None) -> str:
+        """Delete the shared module lib/<module>.py (staged)."""
+        p = proj(project)
+        b = wbranch(p, branch)
+        if p.read(f"lib/{module}.py", b) is None:
+            raise StoreError(f"No module lib/{module}.py")
+        p.stage(b, {f"lib/{module}.py": None})
+        return f"Removed lib/{module}.py on {b} (staged)."
+
+    # ---------- assembly.* (parts and joints) ----------
+
+
+    def asm_text(asm: dict[str, Any]) -> str:
+        from ..sim.motion.model import public_mate
+        out = {"parts": [{k: v for k, v in e.items() if k in ("id", "name", "material", "color", "mass_kg", "file")} for e in asm["parts"]],
+               "mates": [public_mate(m) for m in asm.get("mates") or []]}
+        return dump(out)
+
+    @tool("assembly_read", read_only=True)
+    async def assembly_read(project: ProjectId, ref: ReadRef = None) -> str:
+        """The assembly: every part (id, name, material, colour, file) and every joint (mate) between parts."""
+        p = proj(project)
+        return asm_text(p.assembly(rref(p, ref)))
+
+    @tool("assembly_set_mate")
+    async def assembly_set_mate(project: ProjectId,
+                                type: Annotated[Literal["fixed", "revolute", "slider", "cylindrical", "planar", "ball"],
+                                                Field(description="fixed: no motion (bolted, welded). revolute: rotates about axis. slider: moves along axis. cylindrical: rotates and slides along axis. planar: slides in the plane normal to axis. ball: rotates about origin.")],
+                                a: Annotated[str, Field(description="First part id")],
+                                b: Annotated[str, Field(description="Second part id")],
+                                origin: Vec3,
+                                axis: Annotated[list[float] | None, Field(description="Joint axis direction [x, y, z]; default [0, 0, 1]")] = None,
+                                limits: Annotated[list[float] | None, Field(description="[min, max] travel: degrees for revolute, mm for slider")] = None,
+                                name: Annotated[str | None, Field(description="Short label, e.g. 'Hinge pin'")] = None,
+                                id: Annotated[str | None, Field(description="Id of an existing mate to change; omit to add a new one")] = None,
+                                branch: WriteBranch = None) -> str:
+        """Add or change a joint (mate) between two parts (staged). Parts stay where their scripts put them; the mate records how they connect and move."""
+        p = proj(project)
+        br = wbranch(p, branch)
+        asm = p.assembly(br)
+        ids = {e["id"] for e in asm["parts"]}
+        for x in (a, b):
+            if x not in ids:
+                raise StoreError(f"No part {x!r}. Parts: {', '.join(sorted(ids)) or 'none yet'}")
+        if a == b:
+            raise StoreError("A mate connects two different parts")
+        if limits is not None and (len(limits) != 2 or limits[0] > limits[1]):
+            raise StoreError("limits must be [min, max]")
+        ax = axis or [0.0, 0.0, 1.0]
+        if len(ax) != 3 or not any(abs(v) > 1e-9 for v in ax):
+            raise StoreError("axis must be a non-zero [x, y, z]")
+        mates = asm.setdefault("mates", []) or []
+        asm["mates"] = mates
+        m = next((x for x in mates if x.get("id") == id), None) if id else None
+        if id and m is None:
+            raise StoreError(f"No mate {id!r}. Mates: {', '.join(x['id'] for x in mates) or 'none'}")
+        if m is None:
+            n = 1 + max([int(str(x.get("id", "mate-0")).rsplit("-", 1)[-1]) for x in mates if str(x.get("id", "")).rsplit("-", 1)[-1].isdigit()] or [0])
+            m = {"id": f"mate-{n}"}
+            mates.append(m)
+        m.update({"type": type, "a": a, "b": b, "origin": [float(v) for v in origin], "axis": [float(v) for v in ax],
+                  "name": name or m.get("name") or f"{a} – {b}"})
+        if limits is not None:
+            m["limits"] = [float(v) for v in limits]
+        elif type == "fixed":
+            m.pop("limits", None)
+        p.stage(br, {"assembly.yaml": dump(asm)})
+        return f"{'Changed' if id else 'Added'} {m['id']}: {type} between {a} and {b} at {m['origin']} (staged on {br}). Commit with project_commit."
+
+    @tool("assembly_remove_mate", destructive=True)
+    async def assembly_remove_mate(project: ProjectId, id: Annotated[str, Field(description="Mate id, e.g. mate-1")], branch: WriteBranch = None) -> str:
+        """Remove a joint (mate) (staged)."""
+        p = proj(project)
+        br = wbranch(p, branch)
+        asm = p.assembly(br)
+        mates = asm.get("mates") or []
+        if not any(x.get("id") == id for x in mates):
+            raise StoreError(f"No mate {id!r}")
+        asm["mates"] = [x for x in mates if x.get("id") != id]
+        p.stage(br, {"assembly.yaml": dump(asm)})
+        return f"Removed {id} (staged on {br})."
+
+    @tool("assembly_set_part")
+    async def assembly_set_part(project: ProjectId, part: str,
+                                name: Annotated[str | None, Field(description="Display name")] = None,
+                                color: Annotated[str | None, Field(description="Hex colour like #B4C2D6")] = None,
+                                material: Annotated[str | None, Field(description="Steel, Aluminium, Stainless, PLA, PETG, ABS, Nylon, Brass, Titanium, Wood")] = None,
+                                mass_kg: Annotated[float | None, Field(description="Fixed mass for bought-in parts")] = None,
+                                branch: WriteBranch = None) -> str:
+        """Change a part's name, colour, material or fixed mass without touching its code (staged)."""
+        p = proj(project)
+        br = wbranch(p, branch)
+        asm = p.assembly(br)
+        e = next((x for x in asm["parts"] if x["id"] == part), None)
+        if e is None:
+            raise StoreError(f"No part {part!r}. Parts: {', '.join(x['id'] for x in asm['parts']) or 'none yet'}")
+        for k, v in (("name", name), ("color", color), ("material", material), ("mass_kg", mass_kg)):
+            if v is not None:
+                e[k] = v
+        p.stage(br, {"assembly.yaml": dump(asm)})
+        return f"Updated {part} (staged on {br})."
 
     @tool("geometry_rebuild")
     async def geometry_rebuild(project: ProjectId, ref: ReadRef = None,

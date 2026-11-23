@@ -5,7 +5,7 @@
 import { useApp } from '../state/store';
 import { api, EngineError } from './client';
 import type {
-  BoundaryType, DriverKind, EngineJob, EngineMate, EngineStudy, EngineTarget, Material, MateType, Mechanism, MotionSeries, MotionSetup,
+  BoundaryType, DriverKind, EngineJob, MotionMate, EngineStudy, EngineTarget, Material, MateType, Mechanism, MotionSeries, MotionSetup,
   SimState, StudyBoundary, StudyType, SweepRow,
 } from './types';
 import type { EngineEvent } from './client';
@@ -41,7 +41,7 @@ export async function loadStudies() {
   const [studies, materials, mates] = await Promise.all([
     api<EngineStudy[]>(P('/studies')),
     get().eng?.sim?.materials.length ? Promise.resolve(get().eng!.sim.materials) : api<Material[]>('/api/materials'),
-    api<EngineMate[]>(P('/mates')).catch(() => [] as EngineMate[]),
+    api<MotionMate[]>(P('/mates')).catch(() => [] as MotionMate[]),
   ]);
   if (n !== seq) return;
   const jobs = { ...(get().eng?.sim?.jobs ?? {}) };

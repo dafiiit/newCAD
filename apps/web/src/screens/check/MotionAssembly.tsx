@@ -12,7 +12,7 @@ import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js';
 import { apiBuffer } from '../../engine/client';
 import { engineParts, type ViewPart } from '../../engine/model';
 import { toView } from '../../engine/sync';
-import type { EngineMate, EngineStudy } from '../../engine/types';
+import type { MotionMate, EngineStudy } from '../../engine/types';
 import { MODEL_Y_OFFSET } from '../../model/parts';
 import { useApp } from '../../state/store';
 import { loadPart, type Loaded } from '../how/EngineAssembly';
@@ -132,7 +132,7 @@ export function MotionAssembly({ st }: { st: EngineStudy }) {
   );
 }
 
-function PosedPart({ part, source, grab, markers }: { part: ViewPart; source: React.RefObject<(pid: string) => Pose>; grab: React.RefObject<RapierPreview | null> | null; markers: EngineMate[] }) {
+function PosedPart({ part, source, grab, markers }: { part: ViewPart; source: React.RefObject<(pid: string) => Pose>; grab: React.RefObject<RapierPreview | null> | null; markers: MotionMate[] }) {
   const [loaded, setLoaded] = useState<Loaded | null>(null);
   const g = useRef<THREE.Group>(null);
   const selected = useApp((s) => s.selected === part.id);
@@ -173,7 +173,7 @@ function PosedPart({ part, source, grab, markers }: { part: ViewPart; source: Re
 }
 
 /** Green axis through a joint centre (it moves with the joint's second part). */
-function JointMarker({ mate }: { mate: EngineMate }) {
+function JointMarker({ mate }: { mate: MotionMate }) {
   const o = toView(mate.origin_mm!);
   const a = new THREE.Vector3(...toView(mate.axis_dir!)).normalize();
   const q = new THREE.Quaternion().setFromUnitVectors(new THREE.Vector3(0, 1, 0), a);

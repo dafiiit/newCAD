@@ -81,6 +81,29 @@ async def test_bot_cannot_escape_its_branch(engine):
     assert "Box(220" in p.read("parts/plate.py", "main") and "Box(10" in p.read("parts/plate.py", t.branch)
 
 
+async def test_bot_branches_off_and_reports_every_branch(engine):
+    p = engine.store.create("Variants", template="demo")
+
+    def script(text, ctx):
+        yield Turn("", [call("code_write_module", module="params", code="T = 10\n")], "tool")
+        yield Turn("", [call("project_commit", message="params")], "tool")
+        out = yield Turn("", [call("project_create_branch", name="lighter")], "tool")
+        assert not out[0].is_error, out[0].text
+        yield Turn("", [call("geometry_patch_part", part="plate", find="PLATE_T = 10", replace="PLATE_T = 6")], "tool")
+        yield Turn("Made a lighter variant too.", [], "end")  # uncommitted work is committed for it
+    engine.bot.script = script
+    try:
+        t = await engine.bot.wait(engine.bot.start_change(p.id, "thinner plate").id)
+    finally:
+        engine.bot.script = None
+    assert t.status == "done", t.problem
+    assert t.branch.startswith("bot/lighter") and len(t.branches) == 2
+    assert "PLATE_T = 6" in p.read("parts/plate.py", t.branch)
+    msgs = engine.bot.chat(p.id)
+    assert msgs[0]["who"] == "you" and msgs[0]["task"] == t.id
+    assert "I also tried bot/thinner-plate" in msgs[-1]["text"] and msgs[-1]["task"] == t.id
+
+
 async def test_apply_bot_branch_by_merge(engine):
     p = engine.store.create("Apply", template="demo")
     t = await engine.bot.wait(engine.bot.start_change(p.id, "make a bracket").id)

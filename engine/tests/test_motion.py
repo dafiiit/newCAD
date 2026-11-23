@@ -310,3 +310,18 @@ async def test_mcp_motion_tools(engine):
         assert "MuJoCo" in text and "revolute-1" in text and "peak load" in text, text
         r = await c.call_tool("motion_list_joints", {"project": p.id})
         assert "revolute-1" in r.content[0].text
+
+
+def test_mates_written_by_assembly_set_mate_are_read_by_motion():
+    from newcad_engine.sim.motion.model import mates_from, public_mate, unsupported_mates
+    asm = {"mates": [
+        {"id": "mate-1", "type": "slider", "a": "base", "b": "carriage", "origin": [0, 0, 0], "axis": [1, 0, 0], "name": "Rail"},
+        {"id": "mate-2", "type": "cylindrical", "a": "base", "b": "shaft", "origin": [0, 0, 0], "axis": [0, 0, 1]},
+        {"id": "revolute-1", "type": "revolute", "parts": ["ground", "base"], "label": "Pivot"},
+    ]}
+    ms = {m.id: m for m in mates_from(asm)}
+    assert ms["mate-1"].type == "prismatic" and ms["mate-1"].parts == ["base", "carriage"] and ms["mate-1"].label == "Rail"
+    assert "mate-2" not in ms and len(unsupported_mates(asm)) == 1
+    pub = public_mate(asm["mates"][2])
+    assert (pub["a"], pub["b"], pub["name"]) == ("ground", "base", "Pivot")
+    assert public_mate({"id": "x", "type": "prismatic", "parts": ["a", "b"]})["type"] == "slider"

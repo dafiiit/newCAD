@@ -1,4 +1,5 @@
 import { useMemo } from 'react';
+import type { ChatMessage, ChatThread } from '../../data/types';
 import { CHAT_PROJECTS, MODES } from '../../data/seed';
 import { aheadStage, ivCurrent, openKeys, useApp } from '../../state/store';
 import { partNameOf } from '../../engine/model';
@@ -15,7 +16,8 @@ export function ChatBar() {
   const selName = (s.layer === 'how' || isCheck) && s.selected ? partNameOf(s, s.selected) : undefined;
   const selPart = selName ? { name: selName } : undefined;
   const live = !!s.eng;
-  const activeThread = s.activeChat === 'live' ? null : s.chats.find((c) => c.id === s.activeChat);
+  const engThreads = useMemo(() => (s.eng ? threadsOf(s.msgs) : null), [s.eng, s.msgs]);
+  const activeThread = s.activeChat === 'live' ? null : (engThreads ?? s.chats).find((c) => c.id === s.activeChat);
   const msgs = activeThread ? activeThread.msgs : s.msgs;
   const full = s.chatOpen && s.chatFull;
 
@@ -55,6 +57,12 @@ export function ChatBar() {
 
   const groups = useMemo(() => {
     const q = s.chatSearch.toLowerCase().trim();
+    if (engThreads) {
+      const items = engThreads
+        .filter((c) => !q || `${c.title} ${c.msgs.map((m) => m.text).join(' ')}`.toLowerCase().includes(q))
+        .map((c) => ({ id: c.id, title: c.title, when: c.when }));
+      return [{ id: 'eng', name: s.projectName, items: [{ id: 'live', title: 'All messages', when: '' }, ...items] }];
+    }
     const out: { id: string; name: string; items: { id: string; title: string; when: string }[] }[] = [
       { id: 'gm', name: s.projectName, items: [{ id: 'live', title: 'Current session', when: 'Now' }] },
     ];
@@ -66,7 +74,7 @@ export function ChatBar() {
       g.items.push({ id: c.id, title: c.title, when: c.when });
     }
     return out.filter((g) => g.items.length);
-  }, [s.chats, s.chatSearch, s.projectName]);
+  }, [s.chats, s.chatSearch, s.projectName, engThreads]);
 
   return (
     <>
@@ -101,6 +109,9 @@ export function ChatBar() {
                 <span className="botmark"><BotGlyph size={16} /></span>
                 <strong>Bot</strong>
                 <span className="ctx">{activeThread ? activeThread.title : `${s.projectName} · ${s.layer === 'check' ? 'Check' : s.layer === 'how' ? 'How?' : 'Projects'}`}</span>
+                {!full && engThreads && engThreads.length > 0 && (
+                  <button className="linkbtn" style={{ fontSize: 12 }} onClick={() => set({ chatFull: true, chatSide: true })}>{engThreads.length} conversation{engThreads.length === 1 ? '' : 's'}</button>
+                )}
                 <button className="iconbtn" aria-label={full ? 'Exit full screen' : 'Full screen'} title={full ? 'Exit full screen' : 'Full screen'} onClick={() => set({ chatFull: !s.chatFull })}>
                   {full ? <CollapseIcon size={16} /> : <ExpandIcon size={16} />}
                 </button>
@@ -109,7 +120,10 @@ export function ChatBar() {
                 {s.typing && <div className="msg bot"><p className="muted">thinking…</p></div>}
                 {msgs.slice().reverse().map((m, i) => (
                   <div key={msgs.length - i} className={cx('msg', m.who === 'you' ? 'you' : 'bot')}>
-                    {m.ctx && <span className="msgctx"><CubeIcon size={11} width={2} />{m.ctx}</span>}
+                    {(m.ctx || m.source === 'comment') && <span className="msgctx"><CubeIcon size={11} width={2} />{m.source === 'comment' ? `3D comment${m.ctx ? ` · ${m.ctx}` : ''}` : m.ctx}</span>}
+                    {!activeThread && engThreads && m.thread && m.who === 'you' && (
+                      <button className="linkbtn msgthread" onClick={() => set({ activeChat: m.thread!, chatFull: true, chatSide: true })}>Open conversation</button>
+                    )}
                     <p>{m.text}</p>
                     {!!m.actions?.length && (
                       <div className="msgacts">
@@ -163,6 +177,38 @@ export function ChatBar() {
       </div>
     </>
   );
+}
+
+const KIND: Record<string, string> = { comment: '3D comment', generate: 'Prototypes', interview: 'Interview', chat: 'Chat' };
+
+function ago(t?: number) {
+  if (!t) return '';
+  const d = Date.now() / 1000 - t;
+  if (d < 60) return 'Now';
+  if (d < 3600) return `${Math.round(d / 60)} min`;
+  if (d < 86400) return `${Math.round(d / 3600)} h`;
+  return `${Math.round(d / 86400)} d`;
+}
+
+/** Engine mode: one conversation per Bot task (chat requests, 3D comments and their follow-ups), plus prototype runs and the interview. */
+function threadsOf(msgs: ChatMessage[]): ChatThread[] {
+  const by = new Map<string, ChatMessage[]>();
+  for (const m of msgs) {
+    if (!m.thread) continue;
+    const list = by.get(m.thread) ?? [];
+    list.push(m);
+    by.set(m.thread, list);
+  }
+  const out: (ChatThread & { last: number })[] = [];
+  for (const [id, list] of by) {
+    const first = list.find((m) => m.who === 'you') ?? list[0];
+    const kind = KIND[first.source ?? list[0].source ?? 'chat'] ?? 'Chat';
+    const text = id === 'interview' ? 'What? interview' : first.text.replace(/\s+/g, ' ');
+    const title = `${kind === 'Chat' || id === 'interview' ? '' : `${kind}: `}${text.length > 60 ? `${text.slice(0, 58)}…` : text}`;
+    const last = list[list.length - 1].t ?? 0;
+    out.push({ id, project: 'eng', title, when: ago(last), msgs: list, last });
+  }
+  return out.sort((a, b) => b.last - a.last);
 }
 
 /** On What? the chat collapses into a status pill that shows what Bot is doing in the background. */

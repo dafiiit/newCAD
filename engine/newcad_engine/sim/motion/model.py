@@ -59,6 +59,20 @@ class Mate(BaseModel):
     axis: list[float] | None = Field(default=None, description="Joint axis; empty = from the faces")
     limits: list[float] | None = Field(default=None, description="[min, max] in deg (revolute) or mm (prismatic)")
 
+    @model_validator(mode="before")
+    @classmethod
+    def _compat(cls, d: Any) -> Any:
+        """Also read mates written by assembly_set_mate ({a, b, name}, type 'slider')."""
+        if isinstance(d, dict):
+            d = dict(d)
+            if "parts" not in d and "a" in d and "b" in d:
+                d["parts"] = [d["a"], d["b"]]
+            if not d.get("label") and d.get("name"):
+                d["label"] = d["name"]
+            if d.get("type") == "slider":
+                d["type"] = "prismatic"
+        return d
+
     @field_validator("origin", "axis")
     @classmethod
     def _v3(cls, v: list[float] | None) -> list[float] | None:
@@ -152,6 +166,29 @@ def mates_from(assembly: dict[str, Any]) -> list[Mate]:
             out.append(Mate.model_validate(m))
         except Exception:  # a broken entry shouldn't hide the others
             continue
+    return out
+
+
+UNSUPPORTED = {"cylindrical", "planar"}
+
+
+def unsupported_mates(assembly: dict[str, Any]) -> list[str]:
+    """Warnings for mates the motion solver leaves out (they are still part of the assembly)."""
+    return [f"Joint {m.get('name') or m.get('label') or m.get('id')} ({m['type']}) is not simulated yet; motion studies support revolute, slider, ball and fixed"
+            for m in assembly.get("mates") or [] if m.get("type") in UNSUPPORTED]
+
+
+def public_mate(m: dict[str, Any]) -> dict[str, Any]:
+    """One mate with both spellings, so readers of either format see it: parts/label/prismatic and a/b/name/slider."""
+    out = dict(m)
+    parts = m.get("parts") or ([m["a"], m["b"]] if "a" in m and "b" in m else None)
+    if parts and len(parts) == 2:
+        out["parts"], out["a"], out["b"] = list(parts), parts[0], parts[1]
+    if m.get("label") or m.get("name"):
+        out["label"] = m.get("label") or m.get("name")
+        out["name"] = m.get("name") or m.get("label")
+    if m.get("type") == "prismatic":
+        out["type"] = "slider"
     return out
 
 

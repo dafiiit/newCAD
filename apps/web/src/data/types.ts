@@ -87,6 +87,10 @@ export interface ChatMessage {
   /** Buttons under a Bot reply (engine mode): apply or check out its branch, open the history. */
   actions?: ('apply' | 'checkout' | 'history')[];
   branch?: string;
+  /** Engine mode: which conversation it belongs to (a Bot task, a prototype run, the interview), where it came from, and when (s). */
+  thread?: string;
+  source?: 'chat' | 'comment' | 'generate' | 'interview';
+  t?: number;
 }
 
 export interface ChatThread {

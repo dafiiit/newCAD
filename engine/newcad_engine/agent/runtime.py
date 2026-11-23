@@ -3,9 +3,10 @@
 The runtime is an MCP client of the engine's own MCP server (connected
 in-process), so BuilderBot uses exactly the tools an external agent sees.
 Guard rails enforced here and in the server:
-- the Bot is pinned to one project and one branch (never the user's HEAD,
-  except interview mode which only edits the What? sheet)
-- tools that move HEAD, create projects or branches are not offered
+- the Bot is pinned to one project and to its own branches (never the user's
+  HEAD, except interview mode which only edits the What? sheet); it can create
+  more bot/* branches to try alternatives and switch between them
+- tools that move HEAD or create projects are not offered
 - a step budget and a token budget stop runaway loops
 - generated code only runs in the sandboxed geometry worker
 """
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 
 log = logging.getLogger("newcad.bot")
 
-HIDDEN_TOOLS = {"project_list", "project_create", "project_create_branch", "project_checkout"}
+HIDDEN_TOOLS = {"project_list", "project_create", "project_checkout"}
 INTERVIEW_TOOLS = {"project_open", "spec_read", "spec_open_questions", "spec_answer", "spec_add_question", "spec_set_overview"}
 INJECTED = ("project", "branch")
 
@@ -43,6 +44,8 @@ class LoopResult:
     tokens: int
     calls: list[dict[str, Any]] = field(default_factory=list)
     problem: str = ""
+    branch: str = ""  # the branch the Bot worked on last
+    branches: list[str] = field(default_factory=list)  # every branch it wrote to (its first one plus any it created)
 
 
 def label_for(call: ToolCall) -> str:
@@ -68,6 +71,21 @@ def label_for(call: ToolCall) -> str:
         "notes_list": "Reading comments",
         "notes_resolve": "Replying to a comment",
         "ask_user": "Asking you",
+        "project_create_branch": f"Branching to try {a.get('name', 'a variant')}",
+        "project_switch_branch": f"Switching to {a.get('to', 'another branch')}",
+        "code_list_files": "Listing the project files",
+        "code_read_file": f"Reading {a.get('path', 'a file')}",
+        "code_write_module": f"Writing lib/{a.get('module', 'module')}.py",
+        "code_patch_file": f"Editing {a.get('path', 'a file')}",
+        "code_remove_module": f"Removing lib/{a.get('module', 'module')}.py",
+        "assembly_read": "Reading the assembly",
+        "assembly_set_mate": f"Setting a {a.get('type', '')} joint".replace("  ", " "),
+        "assembly_remove_mate": f"Removing joint {a.get('id', '')}".strip(),
+        "assembly_set_part": f"Updating {a.get('part', 'a part')}",
+        "sim_create_study": "Setting up a simulation",
+        "sim_add_boundary": "Adding a load or support",
+        "sim_run": "Running the simulation",
+        "sim_results": "Reading simulation results",
     }.get(call.name, call.name)
 
 
@@ -88,58 +106,69 @@ async def run_loop(engine: "Engine", *, project: str, branch: str, task_id: str,
                    on_step: Callable[[str, int], None] | None = None, on_text: Callable[[str], None] | None = None,
                    should_stop: Callable[[], bool] | None = None) -> LoopResult:
     local_tools = local_tools or {}
-    token = current_actor.set(bot_actor(project, branch, task_id))
+    actor = bot_actor(project, branch, task_id)
+    token = current_actor.set(actor)
     calls_log: list[dict[str, Any]] = []
-    steps = tokens = 0
     try:
-        async with Client(engine.mcp) as client:
-            listed = (await client.list_tools()).tools
-            mcp_tools = {t.name: t for t in listed if t.name not in HIDDEN_TOOLS and (allowed is None or t.name in allowed)}
-            injected_branch = {t.name: "branch" in (t.input_schema or {}).get("properties", {}) for t in mcp_tools.values()}
-            specs = [to_spec(t) for t in mcp_tools.values()] + [s for s, _ in local_tools.values()]
-            try:
-                conv = conv_factory(specs)
-                turn = await conv.send_user(prompt)
-            except AdapterError as e:
-                return LoopResult("failed", "", 0, 0, calls_log, str(e))
-            except Exception as e:  # noqa: BLE001
-                log.exception("model call failed")
-                return LoopResult("failed", "", 0, 0, calls_log, f"Model call failed: {type(e).__name__}: {e}")
-            while True:
-                steps += 1
-                tokens += turn.input_tokens + turn.output_tokens
-                if turn.text.strip() and on_text and turn.calls:
-                    on_text(turn.text.strip())
-                if turn.stop == "refusal":
-                    return LoopResult("failed", turn.text, steps, tokens, calls_log, "The model declined this request" + (f" ({turn.detail})" if turn.detail else ""))
-                if turn.stop == "max_tokens":
-                    return LoopResult("failed", turn.text, steps, tokens, calls_log, "The model's reply was cut off (output limit)")
-                if not turn.calls:
-                    return LoopResult("done", turn.text.strip(), steps, tokens, calls_log)
-                if should_stop and should_stop():
-                    return LoopResult("stopped", turn.text, steps, tokens, calls_log, "Stopped by you")
-                if steps >= max_steps:
-                    return LoopResult("stopped", turn.text, steps, tokens, calls_log, f"Stopped after {max_steps} steps (step budget)")
-                if tokens >= max_tokens:
-                    return LoopResult("stopped", turn.text, steps, tokens, calls_log, f"Stopped after {tokens:,} tokens (token budget)")
-                outputs: list[ToolOutput] = []
-                for call in turn.calls:
-                    if on_step:
-                        on_step(label_for(call), steps)
-                    t0 = time.perf_counter()
-                    out = await _execute(client, call, project, branch, mcp_tools, injected_branch, local_tools)
-                    calls_log.append({"tool": call.name, "args": _short(call.args), "ok": not out.is_error,
-                                      "ms": round((time.perf_counter() - t0) * 1000), "result": out.text[:300]})
-                    outputs.append(out)
-                try:
-                    turn = await conv.send_tool_results(outputs)
-                except AdapterError as e:
-                    return LoopResult("failed", "", steps, tokens, calls_log, str(e))
-                except Exception as e:  # noqa: BLE001 - a broken provider response must not crash the engine
-                    log.exception("model call failed")
-                    return LoopResult("failed", "", steps, tokens, calls_log, f"Model call failed: {type(e).__name__}: {e}")
+        res = await _loop(engine, actor, project, conv_factory, prompt, allowed, local_tools, max_steps, max_tokens,
+                          on_step, on_text, should_stop, calls_log)
+        res.branch, res.branches = actor.branch or branch, list(actor.owned)
+        return res
     finally:
         current_actor.reset(token)
+
+
+async def _loop(engine: "Engine", actor: Any, project: str, conv_factory: Callable[[list[ToolSpec]], Conversation], prompt: str,
+                allowed: set[str] | None, local_tools: dict[str, tuple[ToolSpec, LocalTool]], max_steps: int, max_tokens: int,
+                on_step: Callable[[str, int], None] | None, on_text: Callable[[str], None] | None,
+                should_stop: Callable[[], bool] | None, calls_log: list[dict[str, Any]]) -> LoopResult:
+    steps = tokens = 0
+    async with Client(engine.mcp) as client:
+        listed = (await client.list_tools()).tools
+        mcp_tools = {t.name: t for t in listed if t.name not in HIDDEN_TOOLS and (allowed is None or t.name in allowed)}
+        injected_branch = {t.name: "branch" in (t.input_schema or {}).get("properties", {}) for t in mcp_tools.values()}
+        specs = [to_spec(t) for t in mcp_tools.values()] + [s for s, _ in local_tools.values()]
+        try:
+            conv = conv_factory(specs)
+            turn = await conv.send_user(prompt)
+        except AdapterError as e:
+            return LoopResult("failed", "", 0, 0, calls_log, str(e))
+        except Exception as e:  # noqa: BLE001
+            log.exception("model call failed")
+            return LoopResult("failed", "", 0, 0, calls_log, f"Model call failed: {type(e).__name__}: {e}")
+        while True:
+            steps += 1
+            tokens += turn.input_tokens + turn.output_tokens
+            if turn.text.strip() and on_text and turn.calls:
+                on_text(turn.text.strip())
+            if turn.stop == "refusal":
+                return LoopResult("failed", turn.text, steps, tokens, calls_log, "The model declined this request" + (f" ({turn.detail})" if turn.detail else ""))
+            if turn.stop == "max_tokens":
+                return LoopResult("failed", turn.text, steps, tokens, calls_log, "The model's reply was cut off (output limit)")
+            if not turn.calls:
+                return LoopResult("done", turn.text.strip(), steps, tokens, calls_log)
+            if should_stop and should_stop():
+                return LoopResult("stopped", turn.text, steps, tokens, calls_log, "Stopped by you")
+            if steps >= max_steps:
+                return LoopResult("stopped", turn.text, steps, tokens, calls_log, f"Stopped after {max_steps} steps (step budget)")
+            if tokens >= max_tokens:
+                return LoopResult("stopped", turn.text, steps, tokens, calls_log, f"Stopped after {tokens:,} tokens (token budget)")
+            outputs: list[ToolOutput] = []
+            for call in turn.calls:
+                if on_step:
+                    on_step(label_for(call), steps)
+                t0 = time.perf_counter()
+                out = await _execute(client, call, project, actor.branch, mcp_tools, injected_branch, local_tools)
+                calls_log.append({"tool": call.name, "args": _short(call.args), "ok": not out.is_error,
+                                  "ms": round((time.perf_counter() - t0) * 1000), "result": out.text[:300]})
+                outputs.append(out)
+            try:
+                turn = await conv.send_tool_results(outputs)
+            except AdapterError as e:
+                return LoopResult("failed", "", steps, tokens, calls_log, str(e))
+            except Exception as e:  # noqa: BLE001 - a broken provider response must not crash the engine
+                log.exception("model call failed")
+                return LoopResult("failed", "", steps, tokens, calls_log, f"Model call failed: {type(e).__name__}: {e}")
 
 
 async def _execute(client: Client, call: ToolCall, project: str, branch: str, mcp_tools: dict[str, Any],
