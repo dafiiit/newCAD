@@ -1,0 +1,84 @@
+"""OpenAI and any OpenAI-compatible endpoint (LM Studio, Ollama, MLX server, vLLM) via Chat Completions."""
+from __future__ import annotations
+
+import base64
+import json
+from typing import Any
+
+import openai
+
+from .base import AdapterError, Conversation, ToolCall, ToolOutput, ToolSpec, Turn
+
+DEFAULT_MODEL = "gpt-5"
+
+
+class OpenAIConversation(Conversation):
+    def __init__(self, system: str, tools: list[ToolSpec], model: str, options: dict[str, Any]):
+        super().__init__(system, tools, model or DEFAULT_MODEL, options)
+        kw: dict[str, Any] = {"max_retries": 3}
+        if options.get("base_url"):
+            kw["base_url"] = options["base_url"]
+            kw["api_key"] = options.get("api_key") or "not-needed"  # local servers usually ignore the key
+        elif options.get("api_key"):
+            kw["api_key"] = options["api_key"]
+        self.client = options.get("client") or openai.AsyncOpenAI(**kw)
+        self.messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
+        self.api_tools = [{"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.schema}} for t in tools]
+
+    async def _call(self) -> Turn:
+        try:
+            resp = await self.client.chat.completions.create(model=self.model, messages=self.messages, tools=self.api_tools)
+        except openai.AuthenticationError as e:
+            raise AdapterError("The model provider rejected the API key.") from e
+        except openai.NotFoundError as e:
+            raise AdapterError(f"Unknown model {self.model} at this endpoint") from e
+        except openai.RateLimitError as e:
+            raise AdapterError("Rate limit reached; try again in a minute.") from e
+        except openai.APIStatusError as e:
+            raise AdapterError(f"Model API error {e.status_code}: {e.message}") from e
+        except openai.APIConnectionError as e:
+            raise AdapterError(f"Can't reach the model endpoint {self.options.get('base_url') or 'api.openai.com'}.") from e
+        choice = resp.choices[0]
+        msg = choice.message
+        calls: list[ToolCall] = []
+        raw_calls = []
+        for tc in msg.tool_calls or []:
+            if getattr(tc, "type", "function") != "function":
+                continue
+            try:
+                args = json.loads(tc.function.arguments or "{}")
+            except json.JSONDecodeError:
+                args = {"__invalid_json__": tc.function.arguments}
+            calls.append(ToolCall(tc.id, tc.function.name, args))
+            raw_calls.append({"id": tc.id, "type": "function", "function": {"name": tc.function.name, "arguments": tc.function.arguments or "{}"}})
+        entry: dict[str, Any] = {"role": "assistant", "content": msg.content or ""}
+        if raw_calls:
+            entry["tool_calls"] = raw_calls
+        self.messages.append(entry)
+        u = resp.usage
+        tin, tout = (u.prompt_tokens, u.completion_tokens) if u else (0, 0)
+        if choice.finish_reason == "content_filter":
+            return Turn(msg.content or "", [], "refusal", tin, tout, detail="content_filter")
+        if choice.finish_reason == "length" and not calls:
+            return Turn(msg.content or "", [], "max_tokens", tin, tout)
+        return Turn(msg.content or "", calls, "tool" if calls else "end", tin, tout)
+
+    async def send_user(self, text: str) -> Turn:
+        self.messages.append({"role": "user", "content": text})
+        return await self._call()
+
+    async def send_tool_results(self, outputs: list[ToolOutput]) -> Turn:
+        images: list[bytes] = []
+        for o in outputs:
+            text = ("ERROR: " if o.is_error else "") + (o.text or "(no output)")
+            if o.images:
+                text += f"\n({len(o.images)} image(s) attached in the next message)"
+                images.extend(o.images)
+            self.messages.append({"role": "tool", "tool_call_id": o.call_id, "content": text})
+        # Chat Completions tool messages can't carry images, so pictures follow as a user message
+        if images and self.options.get("vision", True):
+            content: list[dict[str, Any]] = [{"type": "text", "text": "Images returned by the tools above:"}]
+            for img in images:
+                content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(img).decode()}})
+            self.messages.append({"role": "user", "content": content})
+        return await self._call()

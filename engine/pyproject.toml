@@ -1,0 +1,37 @@
+[project]
+name = "newcad-engine"
+version = "0.2.0"
+description = "NewCAD engine: projects in git, sandboxed build123d geometry, MCP server and BuilderBot"
+requires-python = ">=3.12,<3.14"
+dependencies = [
+  "build123d>=0.13",
+  "fastapi>=0.115",
+  "uvicorn[standard]>=0.30",
+  "mcp>=2.3,<3",
+  "pygit2>=1.18",
+  "pyyaml>=6",
+  "numpy>=1.26",
+  "pillow>=10",
+  "anthropic>=0.75",
+  "openai>=2",
+  "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+newcad-engine = "newcad_engine.cli:engine_main"
+newcad-mcp = "newcad_engine.cli:mcp_main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["newcad_engine"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+asyncio_default_fixture_loop_scope = "function"
+testpaths = ["tests"]

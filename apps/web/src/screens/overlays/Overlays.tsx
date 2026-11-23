@@ -1,4 +1,6 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
+import { assetUrl } from '../../engine/client';
+import { applyBranch, branchFrom, compareCommit, fullId } from '../../engine/sync';
 import { LIB_CATS, LIBRARY, PROPS } from '../../data/seed';
 import { buildModel, massProps } from '../../model/parts';
 import { ModelThumb } from '../../model/ModelThumb';
@@ -29,12 +31,18 @@ export function VersionHistory() {
   const tips: Record<string, string> = {};
   for (const c of s.commits) tips[c.branch] = c.id;
   const sel = s.commits.find((c) => c.id === s.selCommit) ?? s.commits[s.commits.length - 1];
+  const live = !!s.eng?.log;
+  useEffect(() => { if (live && sel) void compareCommit(sel.id); }, [live, sel?.id]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (!sel) return null;
   const P = PROPS[sel.ver];
+  const num = live ? s.eng!.compare[sel.id] : undefined;
+  const headBranch = s.eng?.log?.headBranch ?? null;
+  const isTip = live && s.eng!.log!.tips[sel.branch] === fullId(sel.id);
 
   return (
     <Modal label="Version history" onClose={close}>
       <div className="modalhead">
-        <div style={{ marginRight: 'auto' }}><h2>Versions &amp; branches</h2><p>Every change by you or Bot is a version. Concepts live on their own branches. Values are mock data.</p></div>
+        <div style={{ marginRight: 'auto' }}><h2>Versions &amp; branches</h2><p>Every change by you or Bot is a version. Concepts live on their own branches.{live ? ' Mass is measured by the engine; stress and cost arrive with the Check phase.' : ' Values are mock data.'}</p></div>
         <button className="iconbtn" aria-label="Close history" onClick={close}><CloseIcon size={20} color="#111" /></button>
       </div>
       <div className="branchbar">
@@ -70,7 +78,7 @@ export function VersionHistory() {
           </div>
         </div>
         <aside className="histdetail">
-          <div className="thumb"><ModelThumb version={sel.ver} /></div>
+          <div className="thumb">{live ? <img className="histthumb" alt={`Model at ${sel.id}`} src={assetUrl(`/api/projects/${s.eng!.pid}/snapshot.png?ref=${fullId(sel.id)}&w=480&h=320`)} /> : <ModelThumb version={sel.ver} />}</div>
           <div className="ptitle">
             <span className="btag" style={{ borderColor: colorOf(sel.branch), color: colorOf(sel.branch) }}>{sel.branch}</span>
             <span className="muted" style={{ fontSize: 12 }}>{sel.id} · {sel.who} · {sel.t}</span>
@@ -78,14 +86,18 @@ export function VersionHistory() {
           <h3 style={{ margin: 0, fontSize: 17 }}>{sel.msg}</h3>
           <p className="diff">{sel.diff || '—'}</p>
           <div className="metrics">
-            <div className="metric"><span>Mass</span><b>{massProps(buildModel(sel.ver)).bracket.toFixed(2)} kg</b></div>
-            <div className="metric"><span>Safety factor</span><b>{P.sf}</b></div>
-            <div className="metric"><span>Peak stress</span><b>{P.stress}</b></div>
-            <div className="metric"><span>Part cost</span><b>{P.cost}</b></div>
+            <div className="metric"><span>Mass</span><b>{live ? (num ? (!num.ok ? 'build error' : num.mass_kg > 0 ? `${num.mass_kg.toFixed(2)} kg` : 'no parts') : '…') : `${massProps(buildModel(sel.ver)).bracket.toFixed(2)} kg`}</b></div>
+            <div className="metric"><span>Safety factor</span><b>{live ? '—' : P.sf}</b></div>
+            <div className="metric"><span>Peak stress</span><b>{live ? '—' : P.stress}</b></div>
+            <div className="metric"><span>Part cost</span><b>{live ? '—' : P.cost}</b></div>
           </div>
           <div className="pactions" style={{ flexWrap: 'wrap' }}>
-            <button className="pillbtn dark" onClick={() => { s.checkout(sel.id); s.showToast(`Checked out ${sel.branch} @ ${sel.id}`); }}>{sel.id === s.head ? 'Checked out' : 'Check out this version'}</button>
+            <button className="pillbtn dark" onClick={() => { s.checkout(sel.id); s.showToast(live && isTip ? `Checked out ${sel.branch}` : `Checked out ${sel.branch} @ ${sel.id}`); }}>{sel.id === s.head ? 'Checked out' : 'Check out this version'}</button>
+            {live && isTip && headBranch && sel.branch !== headBranch && (
+              <button className="pillbtn" onClick={() => void applyBranch(sel.branch)}>Apply {sel.branch} to {headBranch}</button>
+            )}
             <button className="pillbtn" onClick={() => {
+              if (live) { void branchFrom(sel.id); return; }
               const name = `concept-${String.fromCharCode(97 + Object.keys(s.branchColors).length)}`;
               s.addCommit({ branch: name, from: sel.id, ver: sel.ver, msg: `Branch ${name} from ${sel.id}`, who: 'You', diff: 'no geometry change yet' });
               s.showToast(`Created ${name}`);

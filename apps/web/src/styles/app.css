@@ -767,3 +767,15 @@ select{height:36px;border:1.5px solid #111;border-radius:10px;padding:0 10px;fon
 .stage3d{position:absolute;inset:0;touch-action:none}
 .stage3d.pick{cursor:cell}
 .hovtag.fixed{position:fixed}
+
+/* engine mode: editable code, chat actions, engine settings */
+.code.codeedit{display:block;width:100%;box-sizing:border-box;padding:12px 14px;border:0;resize:none;outline:none;white-space:pre;tab-size:4}
+.code.codeedit:focus{box-shadow:0 0 0 2px #1D4ED8 inset}
+select.codefile{border:1px solid #ddd;border-radius:999px;padding:4px 10px;background:#fff}
+.msgacts{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.msgacts .pillbtn{padding:4px 10px;font-size:12px}
+.msg p{white-space:pre-line}
+.engbadge{display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#555}
+.engbadge .dot{width:8px;height:8px;border-radius:50%;background:#16A34A}
+.engbadge .dot.off{background:#B42318}
+.histthumb{width:100%;height:100%;object-fit:contain}

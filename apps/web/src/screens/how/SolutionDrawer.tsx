@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { CONNS, MATE_TYPES } from '../../data/seed';
 import { buildModel, MATERIAL } from '../../model/parts';
 import { headCommit, useApp } from '../../state/store';
@@ -6,6 +6,8 @@ import { BooksIcon, ChevronRight, CloseIcon, CodeIcon, CubeIcon, FolderIcon, Pan
 import { cx, sliderOf, Switch } from '../../components/ui';
 import { codeLines } from './codeLines';
 import { CheckPanel } from '../check/CheckPanel';
+import { engineParts, partNameOf } from '../../engine/model';
+import { savePart } from '../../engine/sync';
 
 /** Left panel on How? (Parts / Notes / Code) and Check (studies). */
 export function SolutionDrawer({ width }: { width: number }) {
@@ -51,12 +53,14 @@ function PartsTab() {
   const s = useApp();
   const { set } = s;
   const model = buildModel(s.version);
+  const ep = engineParts(s);
   const [editing, setEditing] = useState<string | null>(null);
   const [draft, setDraft] = useState('');
   const [dragId, setDragId] = useState<string | null>(null);
-  const sel = model.parts.find((p) => p.id === s.selected);
+  const sel = ep ? undefined : model.parts.find((p) => p.id === s.selected);
+  const esel = ep?.find((p) => p.id === s.selected);
   const items = [
-    ...model.parts.map((p) => ({ id: p.id, name: p.name, color: p.color, removable: false })),
+    ...(ep ?? model.parts).map((p) => ({ id: p.id, name: 'ok' in p && !p.ok ? `${p.name} · build error` : p.name, color: p.color, removable: false })),
     ...s.libParts.map((p) => ({ id: p.id, name: `${p.name} · ${p.variant}${p.qty > 1 ? ` × ${p.qty}` : ''}`, color: '#ffffff', removable: true })),
   ];
   const moveTo = (folder: string | null) => { if (dragId) set({ floc: { ...s.floc, [dragId]: folder } }); setDragId(null); };
@@ -106,6 +110,19 @@ function PartsTab() {
       })}
       {items.filter((it) => !s.floc[it.id] || !s.folders.some((f) => f.id === s.floc[it.id])).map((it) => row(it, false))}
 
+      {ep && s.eng?.building && <p className="muted" style={{ fontSize: 13 }}>Building…</p>}
+      {ep && !ep.length && !s.eng?.building && <p className="muted" style={{ fontSize: 13 }}>No parts yet. Answer the What? sheet and generate prototypes, or ask Bot for a first part.</p>}
+      {esel && (
+        <div className="detail">
+          <h3>{esel.name}</h3>
+          <div className="kv"><span>Material</span><span>{esel.material || '—'}</span></div>
+          <div className="kv"><span>Mass</span><span>{esel.mass_kg !== undefined ? `${esel.mass_kg.toFixed(esel.mass_kg < 0.1 ? 3 : 2)} kg` : '—'}</span></div>
+          <div className="kv"><span>Size</span><span>{esel.ok ? `${(esel.mx[0] - esel.mn[0]).toFixed(0)} × ${(esel.mx[2] - esel.mn[2]).toFixed(0)} × ${(esel.mx[1] - esel.mn[1]).toFixed(0)} mm` : '—'}</span></div>
+          <div className="kv"><span>Source</span><span>{esel.file}</span></div>
+          {!esel.ok && <p className="muted" style={{ fontSize: 12, color: '#B42318' }}>{esel.error}{esel.line ? ` (line ${esel.line})` : ''}</p>}
+          <button className="pillbtn" onClick={() => { set({ chatOpen: true, chatText: `About the ${esel.name.toLowerCase()}: ` }); }}>Ask Bot about it</button>
+        </div>
+      )}
       {sel && (
         <div className="detail">
           <h3>{sel.name}</h3>
@@ -115,8 +132,8 @@ function PartsTab() {
         </div>
       )}
 
-      <div className="sect matehead">Mates<span>{CONNS.length}</span></div>
-      {CONNS.map((c, i) => {
+      {!ep && <div className="sect matehead">Mates<span>{CONNS.length}</span></div>}
+      {!ep && CONNS.map((c, i) => {
         const mt = MATE_TYPES.find((m) => m.id === c.type);
         return (
           <button key={c.title} className={cx('conn mate', s.hiConn === i && 'on')}
@@ -136,7 +153,8 @@ function NotesTab() {
   const pins = useApp((s) => s.pins);
   const showResolved = useApp((s) => s.showResolved);
   const set = useApp((s) => s.set);
-  const model = buildModel(useApp((s) => s.version));
+  const eng = useApp((s) => s.eng);
+  const version = useApp((s) => s.version);
   const visible = pins.filter((p) => showResolved || !p.resolved);
   return (
     <>
@@ -148,7 +166,7 @@ function NotesTab() {
       {visible.map((p) => (
         <button key={p.id} className="note" onClick={() => set({ openPin: p.id })}>
           <span className="nnum">{pins.indexOf(p) + 1}</span>
-          <span><b>{model.parts.find((x) => x.id === p.part)?.name ?? p.part}</b><br />{p.msgs[0]?.text ?? 'New comment'}</span>
+          <span><b>{partNameOf({ eng, version }, p.part) ?? p.part}</b>{p.queued && <span className="muted"> · queued for Bot</span>}<br />{p.msgs[0]?.text ?? 'New comment'}</span>
         </button>
       ))}
       {!visible.length && <p className="muted" style={{ fontSize: 13 }}>No comments yet. Pick the bubble on the right, click a part, then write, sketch or add images.</p>}
@@ -157,6 +175,51 @@ function NotesTab() {
 }
 
 function CodeTab() {
+  const live = useApp((s) => !!s.eng?.manifest);
+  return live ? <EngineCodeTab /> : <StubCodeTab />;
+}
+
+/** Engine mode: the real part files of the checked-out version. Saving makes a new version and rebuilds. */
+function EngineCodeTab() {
+  const s = useApp();
+  const ep = engineParts(s) ?? [];
+  const files = s.eng?.files ?? {};
+  const partFiles = Object.keys(files).filter((f) => f.startsWith('parts/') && f.endsWith('.py')).sort();
+  const selFile = ep.find((p) => p.id === s.selected)?.file;
+  const [file, setFile] = useState<string>(selFile ?? partFiles[0] ?? '');
+  const [draft, setDraft] = useState<Record<string, string>>({});
+  useEffect(() => { if (selFile) setFile(selFile); }, [selFile]);
+  const cur = file && files[file] !== undefined ? file : partFiles[0] ?? '';
+  const text = draft[cur] ?? files[cur] ?? '';
+  const dirty = draft[cur] !== undefined && draft[cur] !== files[cur];
+  const part = ep.find((p) => p.file === cur);
+  const partId = cur.replace(/^parts\//, '').replace(/\.py$/, '');
+  const save = async () => {
+    await savePart(partId, text);
+    setDraft((d) => { const n = { ...d }; delete n[cur]; return n; });
+  };
+  if (!partFiles.length) return <p className="muted" style={{ fontSize: 13 }}>This version has no part files yet.</p>;
+  return (
+    <>
+      <div className="codehead">
+        <select className="codefile" aria-label="Part file" value={cur} onChange={(e) => setFile(e.target.value)}>
+          {partFiles.map((f) => <option key={f} value={f}>{f}</option>)}
+        </select>
+        <button className="pillbtn" onClick={() => { void navigator.clipboard?.writeText(text); s.showToast('Code copied'); }}>Copy</button>
+        <button className="pillbtn dark" disabled={!dirty} onClick={() => void save()}>{dirty ? 'Save and rebuild' : 'Saved'}</button>
+      </div>
+      <p className="muted" style={{ fontSize: 12, margin: '0 0 6px' }}>
+        build123d source on {s.eng?.log?.headBranch ?? 'this version'}. Saving makes a new version and rebuilds the model.
+        {part && !part.ok && <><br /><span style={{ color: '#B42318' }}>Build error{part.line ? ` on line ${part.line}` : ''}: {part.error}</span></>}
+      </p>
+      <textarea className="code codeedit" aria-label="build123d Python code" spellCheck={false} value={text}
+        onChange={(e) => setDraft((d) => ({ ...d, [cur]: e.target.value }))}
+        onKeyDown={(e) => { if ((e.metaKey || e.ctrlKey) && e.key === 's') { e.preventDefault(); if (dirty) void save(); } }} />
+    </>
+  );
+}
+
+function StubCodeTab() {
   const s = useApp();
   const lines = codeLines(s.projectName, s.version, headCommit(s));
   const file = `${s.projectName.toLowerCase().replace(/[^a-z0-9]+/g, '_')}.py`;

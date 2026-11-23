@@ -3,6 +3,9 @@ import { SETTINGS_DEF } from '../../data/seed';
 import type { SettingRow } from '../../data/types';
 import { defaultSettings, useApp } from '../../state/store';
 import { cx, Segmented, Switch } from '../../components/ui';
+import { EngineSettings } from './EngineSettings';
+
+const ENGINE_SECTION = { id: 'engine', title: 'BuilderBot model', intro: 'The language model that writes and changes parts. Settings are kept by the engine.', rows: [] };
 
 function fmt(r: SettingRow, v: number) {
   if (r.fmt === 'pct') return `${v} %`;
@@ -15,8 +18,10 @@ function fmt(r: SettingRow, v: number) {
 export function SettingsScreen() {
   const settings = useApp((s) => s.settings);
   const set = useApp((s) => s.set);
-  const [section, setSection] = useState(SETTINGS_DEF[0].id);
-  const cur = SETTINGS_DEF.find((x) => x.id === section) ?? SETTINGS_DEF[0];
+  const live = useApp((s) => !!s.eng);
+  const sections = live ? [ENGINE_SECTION, ...SETTINGS_DEF] : SETTINGS_DEF;
+  const [section, setSection] = useState(sections[0].id);
+  const cur = sections.find((x) => x.id === section) ?? sections[0];
   const put = (key: string, v: string | number | boolean) => set({ settings: { ...settings, [key]: v } });
 
   return (
@@ -27,11 +32,12 @@ export function SettingsScreen() {
       </div>
       <div className="setwrap">
         <nav className="setnav" aria-label="Settings sections">
-          {SETTINGS_DEF.map((x) => <button key={x.id} className={cx(x.id === section && 'on')} aria-current={x.id === section} onClick={() => setSection(x.id)}>{x.title}</button>)}
+          {sections.map((x) => <button key={x.id} className={cx(x.id === section && 'on')} aria-current={x.id === section} onClick={() => setSection(x.id)}>{x.title}</button>)}
         </nav>
         <section className="pcardx setpanel" aria-label={cur.title}>
           <h2>{cur.title}</h2>
           <p className="muted" style={{ margin: '-6px 0 10px', fontSize: 13 }}>{cur.intro}</p>
+          {cur.id === 'engine' && <EngineSettings />}
           {cur.rows.map((r) => {
             const v = settings[r.key];
             return (

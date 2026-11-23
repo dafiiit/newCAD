@@ -1,0 +1,256 @@
+{
+ "categories": [
+  {
+   "id": "function",
+   "name": "Function",
+   "questions": [
+    {
+     "id": "function-1",
+     "text": "What is the one job it must never fail at?",
+     "examples": [
+      "Hold the part steady while drilling",
+      "Keep the sensor pointing level",
+      "Carry 5 kg without bending"
+     ],
+     "assume": "Its main job as written in the overview.",
+     "followup": {
+      "text": "What happens if it fails: annoying, costly or dangerous?",
+      "examples": [
+       "Just annoying",
+       "Costly downtime",
+       "Someone could get hurt"
+      ],
+      "assume": "A failure is costly, not dangerous."
+     }
+    },
+    {
+     "id": "function-2",
+     "text": "Which loads, motions or forces act on it?",
+     "examples": [
+      "Static, about 2 kg",
+      "Shocks when it is dropped",
+      "Constant vibration from a motor"
+     ],
+     "assume": "Static load from the overview, safety factor 2.",
+     "followup": {
+      "text": "Is there a worst case, like a drop or a sudden shock?",
+      "examples": [
+       "Dropped from a table",
+       "Hit by a tool",
+       "Nothing special"
+      ],
+      "assume": "Survives a drop from 1 m."
+     }
+    },
+    {
+     "id": "function-3",
+     "text": "What does it attach to or hold?",
+     "examples": [
+      "Two M6 screws into a wall",
+      "Clamps onto a Ø30 tube",
+      "Sits on a 40 mm profile"
+     ],
+     "assume": "Standard metric screws into the mounting surface."
+    }
+   ],
+   "extra": {
+    "text": "Does it need to be adjustable after assembly?",
+    "examples": [
+     "Yes, a few millimetres",
+     "No",
+     "Not sure"
+    ],
+    "assume": "Not adjustable."
+   }
+  },
+  {
+   "id": "manufacturing",
+   "name": "Manufacturing",
+   "questions": [
+    {
+     "id": "manufacturing-1",
+     "text": "How will it be made, and by whom?",
+     "examples": [
+      "3D printed at home (PLA/PETG)",
+      "Laser-cut sheet metal, ordered online",
+      "CNC milled aluminium"
+     ],
+     "assume": "3D printed in PETG for the first prototypes.",
+     "followup": {
+      "text": "Do you own the machine, or will you order the parts?",
+      "examples": [
+       "Own 3D printer",
+       "Order online",
+       "A local shop"
+      ],
+      "assume": "Parts are ordered online."
+     }
+    },
+    {
+     "id": "manufacturing-2",
+     "text": "How many pieces, and by when?",
+     "examples": [
+      "1 prototype this week",
+      "10 pieces next month",
+      "100+ later"
+     ],
+     "assume": "One prototype first, a small batch later."
+    },
+    {
+     "id": "manufacturing-3",
+     "text": "Which dimensions must be precise?",
+     "examples": [
+      "Only the hole pattern",
+      "A press fit for a bearing",
+      "Nothing critical"
+     ],
+     "assume": "ISO 2768-m; holes ±0.1 mm."
+    }
+   ],
+   "extra": {
+    "text": "What may one piece cost?",
+    "examples": [
+     "Under €10",
+     "€10 to €50",
+     "Does not matter yet"
+    ],
+    "assume": "Low cost; prototype pricing."
+   }
+  },
+  {
+   "id": "compatibility",
+   "name": "Compatibility",
+   "questions": [
+    {
+     "id": "compatibility-1",
+     "text": "What is around it that it must fit or clear?",
+     "examples": [
+      "Must fit in a 100 mm gap",
+      "Next to a hot motor",
+      "Inside an existing housing"
+     ],
+     "assume": "Free space around it as in the overview."
+    },
+    {
+     "id": "compatibility-2",
+     "text": "Which bought-in parts or standards are fixed?",
+     "examples": [
+      "M6 screws only",
+      "A 608 bearing",
+      "Fits a GoPro mount"
+     ],
+     "assume": "ISO metric fasteners and common bought-in parts."
+    },
+    {
+     "id": "compatibility-3",
+     "text": "How is it assembled and serviced?",
+     "examples": [
+      "One person, hand tools",
+      "Tool-free, with clips",
+      "Removable without damage"
+     ],
+     "assume": "One person with standard hand tools."
+    }
+   ],
+   "extra": {
+    "text": "Do cables or hoses need to pass through or along it?",
+    "examples": [
+     "One cable",
+     "No",
+     "Several hoses"
+    ],
+    "assume": "No cables or hoses."
+   }
+  },
+  {
+   "id": "looks",
+   "name": "Looks",
+   "questions": [
+    {
+     "id": "looks-1",
+     "text": "Who will see it, and where?",
+     "examples": [
+      "Nobody, it is hidden",
+      "Customers at the counter",
+      "On camera in videos"
+     ],
+     "assume": "Mostly hidden; looks are low priority."
+    },
+    {
+     "id": "looks-2",
+     "text": "Which look and finish do you want?",
+     "examples": [
+      "Clean and industrial",
+      "Rounded and friendly",
+      "Minimal, hidden fasteners"
+     ],
+     "assume": "Plain and tidy, edges rounded."
+    },
+    {
+     "id": "looks-3",
+     "text": "Any colours, logos or markings?",
+     "examples": [
+      "Black, matte",
+      "Our brand colour",
+      "Raw material is fine"
+     ],
+     "assume": "Raw material colour, no markings."
+    }
+   ]
+  },
+  {
+   "id": "sustainability",
+   "name": "Sustainability",
+   "questions": [
+    {
+     "id": "sustainability-1",
+     "text": "Where will it be used: indoors, outdoors, wet, hot?",
+     "examples": [
+      "Indoors, dry",
+      "Outdoors, rain and UV",
+      "Under water"
+     ],
+     "assume": "Indoors, room temperature, dry.",
+     "followup": {
+      "text": "Any temperatures beyond normal room conditions?",
+      "examples": [
+       "Up to 60 °C",
+       "Below freezing",
+       "No"
+      ],
+      "assume": "Between 0 and 40 °C."
+     }
+    },
+    {
+     "id": "sustainability-2",
+     "text": "Which materials are preferred or ruled out?",
+     "examples": [
+      "Recyclable metals only",
+      "No PVC",
+      "Recycled plastic preferred"
+     ],
+     "assume": "Single-material where possible, easy to recycle."
+    },
+    {
+     "id": "sustainability-3",
+     "text": "What happens to it at end of life?",
+     "examples": [
+      "Easy to take apart",
+      "Send it back for refurbishing",
+      "Simply recycle it"
+     ],
+     "assume": "Screwed, not glued, so it can be taken apart."
+    }
+   ],
+   "extra": {
+    "text": "How will it be cleaned or maintained?",
+    "examples": [
+     "Wiped by hand",
+     "Not at all",
+     "In a dishwasher"
+    ],
+    "assume": "Wiped by hand."
+   }
+  }
+ ]
+}

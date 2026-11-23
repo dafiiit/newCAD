@@ -84,6 +84,9 @@ export interface ChatMessage {
   who: 'you' | 'bot';
   text: string;
   ctx?: string | null;
+  /** Buttons under a Bot reply (engine mode): apply or check out its branch, open the history. */
+  actions?: ('apply' | 'checkout' | 'history')[];
+  branch?: string;
 }
 
 export interface ChatThread {
@@ -156,4 +159,10 @@ export interface Pin {
   p: [number, number, number];
   resolved?: boolean;
   msgs: { who: string; text: string }[];
+  /** Engine mode: face tag under the pin, cache key of the build it came from, and whether Bot has it queued. */
+  face?: string | null;
+  key?: string | null;
+  queued?: boolean;
+  /** Not saved in the engine yet (a pin placed but no text sent). */
+  draft?: boolean;
 }

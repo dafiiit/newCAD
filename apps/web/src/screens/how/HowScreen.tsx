@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { MATE_TYPES } from '../../data/seed';
-import { buildModel, interference, massProps, MATERIAL, modelBounds } from '../../model/parts';
+import { buildModel, interference, massProps, MATERIAL } from '../../model/parts';
 import { useApp, type CutAxis, type Display } from '../../state/store';
 import { CheckIcon, CloseIcon, CommentIcon, CursorIcon, DotsIcon, ImageIcon, PanelIcon, PathIcon, PencilIcon, ArrowRight, TrashIcon } from '../../components/icons';
 import { ProjectTitle } from '../../components/chrome/TopChrome';
@@ -8,6 +8,9 @@ import { DrawerResizer } from '../../components/chrome/DrawerResizer';
 import { cx, MenuCheck, QBox, Segmented } from '../../components/ui';
 import { ResultOverlay } from '../check/CheckPanel';
 import { SolutionDrawer } from './SolutionDrawer';
+import { boxOverlaps, engineParts, partNameOf, viewBounds } from '../../engine/model';
+import { exportModel, setNoteResolved } from '../../engine/sync';
+import { api } from '../../engine/client';
 import { Viewport3D } from './Viewport3D';
 
 const DISPLAY: Record<string, Display> = { Edges: 'edges', Shaded: 'shaded', Wire: 'wire' };
@@ -77,7 +80,7 @@ function RailMenus() {
   const s = useApp();
   const { set, showToast, setCamera } = s;
   const close = () => set({ menu: null });
-  const bb = modelBounds(buildModel(s.version));
+  const bb = viewBounds(s);
   const cutPosLabel = s.cut ? (() => {
     const ai = { x: 0, y: 2, z: 1 }[s.cut.ax];
     return `${Math.round(bb.mn[ai] + ((bb.mx[ai] - bb.mn[ai]) * s.cut.pct) / 100)} mm`;
@@ -110,7 +113,11 @@ function RailMenus() {
       return (
         <div className="menu" style={{ bottom: 224 }} role="menu">
           {[['STEP assembly', '.step'], ['Mesh for 3D printing', '.stl'], ['Drawings', '.pdf']].map(([l, ext]) => (
-            <button key={ext} className="mi" role="menuitem" onClick={() => { close(); showToast(`${l} (${ext}) is exported by the engine`); }}>{l} <span className="muted">{ext}</span></button>
+            <button key={ext} className="mi" role="menuitem" onClick={() => {
+              close();
+              if (s.eng?.manifest && (ext === '.step' || ext === '.stl')) void exportModel(ext === '.step' ? 'step' : 'stl');
+              else showToast(s.eng ? `${l} (${ext}) arrives in a later phase` : `${l} (${ext}) is exported by the engine`);
+            }}>{l} <span className="muted">{ext}</span></button>
           ))}
         </div>
       );
@@ -161,7 +168,65 @@ function RailMenus() {
   }
 }
 
+function EngineAnalysisCard() {
+  const s = useApp();
+  const ep = (engineParts(s) ?? []).filter((p) => p.ok);
+  const man = s.eng!.manifest!;
+  type Row = { k: string; v: string; parts?: string[]; cls?: string };
+  let title = '', sub = '', headline = '', note = '';
+  let rows: Row[] = [];
+  if (s.analysis === 'interf') {
+    const hits = boxOverlaps(ep);
+    title = 'Interference detection';
+    sub = `${ep.length} parts · ${(ep.length * (ep.length - 1)) / 2} pairs checked`;
+    headline = hits.length ? `${hits.length} pair${hits.length > 1 ? 's' : ''} to look at` : 'No overlaps found';
+    rows = hits.map((h) => ({ k: h.name, v: `boxes overlap ${h.depth.toFixed(1)} mm`, parts: [h.a, h.b] }));
+    note = 'Quick check on the parts’ bounding boxes. Parts that touch or sit inside each other show up here; ask Bot for an exact clash check.';
+  } else if (s.analysis === 'mass') {
+    title = 'Mass estimation';
+    sub = 'From exact B-rep volumes × material density';
+    headline = `Total ${man.mass_kg.toFixed(2)} kg`;
+    rows = [...ep.map((q) => ({ k: `${q.name}${q.material ? ` · ${q.material}` : ''}`, v: `${(q.mass_kg ?? 0).toFixed((q.mass_kg ?? 0) < 0.1 ? 3 : 2)} kg`, parts: [q.id] })), { k: 'Total', v: `${man.mass_kg.toFixed(2)} kg`, cls: 'total' }];
+    note = `Built in ${man.build_ms} ms by the engine from the checked-out version.`;
+  } else {
+    const cg = man.cg ?? [0, 0, 0];
+    const b = man.bbox;
+    title = 'Centre of gravity';
+    sub = `Whole assembly, ${man.mass_kg.toFixed(2)} kg`;
+    headline = `X ${cg[0].toFixed(1)} · Y ${cg[1].toFixed(1)} · Z ${cg[2].toFixed(1)} mm`;
+    rows = [
+      { k: 'Height above base', v: `${(cg[2] - (b ? b.min[2] : 0)).toFixed(1)} mm` },
+      { k: 'Inside the footprint?', v: b && cg[0] >= b.min[0] && cg[0] <= b.max[0] && cg[1] >= b.min[1] && cg[1] <= b.max[1] ? 'Yes' : 'No' },
+    ];
+    note = 'Marked in the 3D view. Z is up, as in the build123d code.';
+  }
+  return (
+    <section className="thread ancard" aria-label="Analysis results">
+      <header>
+        <div style={{ display: 'flex', flexDirection: 'column', marginRight: 'auto' }}><strong>{title}</strong><span className="sub">{sub}</span></div>
+        <button className="iconbtn" aria-label="Close analysis" onClick={() => s.set({ analysis: null, anHi: null })}><CloseIcon size={16} color="#111" /></button>
+      </header>
+      <div className="tmsgs">
+        <div className="anhead">{headline}</div>
+        {rows.map((r) => (
+          <button key={r.k} className={cx('anrow', r.cls, r.parts && 'click')}
+            onClick={() => r.parts && s.set({ selected: r.parts[0] })}
+            onMouseEnter={() => r.parts && s.set({ anHi: r.parts })} onMouseLeave={() => r.parts && s.set({ anHi: null })}>
+            <span>{r.k}</span><b>{r.v}</b>
+          </button>
+        ))}
+        <p className="muted" style={{ fontSize: 12, margin: '4px 0 0' }}>{note}</p>
+      </div>
+    </section>
+  );
+}
+
 function AnalysisCard() {
+  const live = useApp((s) => !!s.eng?.manifest);
+  return live ? <EngineAnalysisCard /> : <StubAnalysisCard />;
+}
+
+function StubAnalysisCard() {
   const s = useApp();
   const model = buildModel(s.version);
   const mp = massProps(model);
@@ -220,7 +285,8 @@ function CommentThread() {
   const [queue, setQueue] = useState(true);
   if (!pin) return null;
   const n = s.pins.indexOf(pin) + 1;
-  const part = buildModel(s.version).parts.find((p) => p.id === pin.part);
+  const partName = partNameOf(s, pin.part);
+  const live = !!s.eng && !pin.draft;
   const send = () => { s.sendPinComment(pin.id, text, queue); setText(''); };
 
   return (
@@ -228,12 +294,18 @@ function CommentThread() {
       <header>
         <span className="nnum">{n}</span>
         <div style={{ display: 'flex', flexDirection: 'column', marginRight: 'auto' }}>
-          <strong>{part?.name ?? pin.part}</strong><span className="sub">3D comment · {pin.msgs.length} message{pin.msgs.length === 1 ? '' : 's'}</span>
+          <strong>{partName ?? pin.part}</strong><span className="sub">3D comment · {pin.msgs.length} message{pin.msgs.length === 1 ? '' : 's'}</span>
         </div>
-        <button className={cx('resbtn', pin.resolved && 'done')} onClick={() => s.set({ pins: s.pins.map((p) => (p.id === pin.id ? { ...p, resolved: !p.resolved } : p)) })}>
+        <button className={cx('resbtn', pin.resolved && 'done')} onClick={() => {
+          if (live) { void setNoteResolved(pin.id, !pin.resolved); return; }
+          s.set({ pins: s.pins.map((p) => (p.id === pin.id ? { ...p, resolved: !p.resolved } : p)) });
+        }}>
           <CheckIcon size={14} width={2.4} />{pin.resolved ? 'Resolved' : 'Resolve'}
         </button>
-        <button className="iconbtn" aria-label="Delete comment" onClick={() => s.set({ pins: s.pins.filter((p) => p.id !== pin.id), openPin: null })}><TrashIcon size={16} /></button>
+        <button className="iconbtn" aria-label="Delete comment" onClick={() => {
+          s.set({ pins: s.pins.filter((p) => p.id !== pin.id), openPin: null });
+          if (live) void api(`/api/projects/${s.eng!.pid}/notes/${pin.id}`, { method: 'DELETE' }).catch((e) => s.showToast(String(e.message ?? e)));
+        }}><TrashIcon size={16} /></button>
         <button className="iconbtn" aria-label="Close thread" onClick={() => s.set({ openPin: null })}><CloseIcon size={16} color="#111" /></button>
       </header>
       <div className="tmsgs">

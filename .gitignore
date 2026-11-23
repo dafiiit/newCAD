@@ -4,3 +4,9 @@ dist/
 .DS_Store
 .env
 .env.*
+
+# engine
+engine/.venv/
+__pycache__/
+*.pyc
+.pytest_cache/

@@ -1,7 +1,8 @@
 import { useMemo } from 'react';
 import { CHAT_PROJECTS, MODES } from '../../data/seed';
 import { aheadStage, ivCurrent, openKeys, useApp } from '../../state/store';
-import { buildModel } from '../../model/parts';
+import { partNameOf } from '../../engine/model';
+import { applyBranch, checkoutRef, stopTasks } from '../../engine/sync';
 import { BotGlyph, ChevronRight, ChevronUp, CloseIcon, CollapseIcon, CubeIcon, ExpandIcon, ImageIcon, PlusIcon, SidebarIcon, ArrowRight, VideoIcon } from '../icons';
 import { cx } from '../ui';
 
@@ -11,12 +12,23 @@ export function ChatBar() {
   const { set, sendChat } = s;
   const isPage = s.layer === 'home' || s.layer === 'team' || s.layer === 'settings';
   const isCheck = s.layer === 'check';
-  const selPart = (s.layer === 'how' || isCheck) && s.selected ? buildModel(s.version).parts.find((p) => p.id === s.selected) : undefined;
+  const selName = (s.layer === 'how' || isCheck) && s.selected ? partNameOf(s, s.selected) : undefined;
+  const selPart = selName ? { name: selName } : undefined;
+  const live = !!s.eng;
   const activeThread = s.activeChat === 'live' ? null : s.chats.find((c) => c.id === s.activeChat);
   const msgs = activeThread ? activeThread.msgs : s.msgs;
   const full = s.chatOpen && s.chatFull;
 
-  const chips: { label: string; go: () => void }[] = isPage
+  const ask = (text: string) => { set({ chatText: text }); setTimeout(() => useApp.getState().sendChat(), 0); };
+  const engineChips: { label: string; go: () => void }[] = isPage
+    ? [{ label: 'Start a new project', go: () => set({ chatText: 'New project: ' }) }]
+    : [
+      { label: 'Make it lighter', go: () => ask('Make it lighter without losing stiffness') },
+      { label: 'Explain this design', go: () => ask('Explain this design in a few sentences: what holds what, and the key numbers') },
+      { label: 'Open versions', go: () => set({ review: true, chatOpen: false }) },
+      ...(s.agent ? [{ label: 'Stop Bot', go: () => void stopTasks() }] : []),
+    ];
+  const chips: { label: string; go: () => void }[] = live ? engineChips : isPage
     ? [{ label: 'Start a new project', go: () => set({ chatText: 'New project: ' }) }]
     : isCheck
       ? [
@@ -99,6 +111,13 @@ export function ChatBar() {
                   <div key={msgs.length - i} className={cx('msg', m.who === 'you' ? 'you' : 'bot')}>
                     {m.ctx && <span className="msgctx"><CubeIcon size={11} width={2} />{m.ctx}</span>}
                     <p>{m.text}</p>
+                    {!!m.actions?.length && (
+                      <div className="msgacts">
+                        {m.actions.includes('apply') && m.branch && <button className="pillbtn dark" onClick={() => void applyBranch(m.branch!)}>Apply to {s.eng?.log?.headBranch ?? 'main'}</button>}
+                        {m.actions.includes('checkout') && m.branch && <button className="pillbtn" onClick={() => void checkoutRef(m.branch!)}>Check out {m.branch}</button>}
+                        {m.actions.includes('history') && <button className="pillbtn" onClick={() => set({ review: true, chatOpen: false, layer: 'how', lastLayer: 'how' })}>Compare versions</button>}
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>

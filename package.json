@@ -5,6 +5,9 @@
   "scripts": {
     "dev": "pnpm --filter @newcad/web dev",
     "build": "pnpm --filter @newcad/web build",
-    "typecheck": "pnpm --filter @newcad/web typecheck"
+    "typecheck": "pnpm --filter @newcad/web typecheck",
+    "dev:engine": "cd engine && uv run --extra dev newcad-engine --port 8765 --demo",
+    "test:engine": "cd engine && uv run --extra dev pytest -q",
+    "mcp": "cd engine && uv run newcad-mcp"
   }
 }

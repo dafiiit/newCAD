@@ -5,6 +5,7 @@ Desktop CAD app. See the implementation plan for the full architecture (React + 
 ## Repository layout
 
 - `apps/web` — the React + Vite + TypeScript UI (react-three-fiber for the 3D view). Runs in any browser.
+- `engine` — the Python engine: git-backed projects, sandboxed build123d workers, REST + WebSocket API, MCP server, BuilderBot.
 - `packages/` — shared packages (protocol schemas later).
 
 ## Run the web UI
@@ -16,7 +17,46 @@ pnpm build      # typecheck + production build
 pnpm typecheck
 ```
 
-The UI currently runs on stub data (`apps/web/src/data/seed.ts`) and a mock model (`apps/web/src/model/parts.ts`). No engine is needed yet.
+Without an engine the UI runs on stub data (`apps/web/src/data/seed.ts`) and a mock model (`apps/web/src/model/parts.ts`). When an engine is running, the same UI loads real projects from it (see below); `apps/web/src/engine/` holds the client and the store sync.
+
+## Run the engine
+
+Needs Python 3.12 and [uv](https://docs.astral.sh/uv/).
+
+```sh
+pnpm dev:engine   # engine on http://127.0.0.1:8765, creates a demo project on first start
+pnpm dev          # in a second terminal; the dev server proxies /api and /mcp to the engine
+pnpm test:engine  # engine tests
+```
+
+The engine keeps everything under `~/.newcad` (override with `NEWCAD_HOME`): one bare git repository per project, a content-addressed build cache, and `engine.json` with the port and a per-launch token. Every request except `/api/health` needs that token; the Vite dev server adds it for you.
+
+### BuilderBot's model
+
+BuilderBot needs a language model. Pick it under Settings → BuilderBot model:
+
+- **Claude (Anthropic)**, the default: set `ANTHROPIC_API_KEY` in the engine's environment. Default model `claude-opus-5-5` with server-side fallbacks enabled (if the model is overloaded, the API retries on a fallback model; turned off automatically for a custom base URL).
+- **OpenAI**: set `OPENAI_API_KEY`.
+- **OpenAI-compatible** (LM Studio, Ollama, MLX, vLLM): set the endpoint URL and model name in Settings; `NEWCAD_COMPAT_API_KEY` if the server wants one.
+
+A key can also be pasted in Settings; the engine keeps it in memory only. For offline UI checks, `NEWCAD_ALLOW_SCRIPTED=1` unlocks a scripted test model.
+
+### Use NewCAD from Claude Desktop (MCP)
+
+The engine is an MCP server: over HTTP at `http://127.0.0.1:<port>/mcp` (with the token as `Authorization: Bearer …`), and over stdio with `newcad-mcp`. For Claude Desktop add this to `claude_desktop_config.json`:
+
+```json
+{
+  "mcpServers": {
+    "newcad": {
+      "command": "uv",
+      "args": ["--directory", "/path/to/newCAD/engine", "run", "newcad-mcp"]
+    }
+  }
+}
+```
+
+Claude Desktop then sees the same projects as the app (tools for projects and versions, the What? spec, part code, rebuilds, measurements, snapshots and 3D comments). Edits it makes show up in a running app within about two seconds.
 
 ### Where things live in `apps/web/src`
 
