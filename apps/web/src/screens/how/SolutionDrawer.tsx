@@ -132,6 +132,26 @@ function PartsTab() {
         </div>
       )}
 
+      {ep && (
+        <>
+          <div className="sect matehead">Mates<span>{s.eng?.mates.length ?? 0}</span></div>
+          {(s.eng?.mates ?? []).map((m) => {
+            const mt = MATE_TYPES.find((x) => x.id === (m.type === 'fixed' ? 'fastened' : m.type));
+            const nm = (id: string) => ep.find((p) => p.id === id)?.name ?? id;
+            const lim = m.limits ? ` · ${m.limits[0]} to ${m.limits[1]}${m.type === 'revolute' ? '°' : ' mm'}` : '';
+            return (
+              <button key={m.id} className={cx('conn mate', s.anHi?.join() === [m.a, m.b].join() && 'on')}
+                onClick={() => set({ anHi: s.anHi?.join() === [m.a, m.b].join() ? null : [m.a, m.b] })}
+                onMouseEnter={() => set({ anHi: [m.a, m.b] })} onMouseLeave={() => set({ anHi: null })}>
+                <span className="mateic">{mt && <PathIcon d={mt.d} size={18} width={1.6} />}</span>
+                <span className="matetx"><b>{m.name || mt?.name}</b><span>{mt?.name} · {nm(m.a)} ↔ {nm(m.b)}{lim}</span></span>
+                <span className="matedof">{mt?.dof === null || mt?.dof === undefined ? '' : `${mt.dof} DOF`}</span>
+              </button>
+            );
+          })}
+          {!s.eng?.mates.length && <p className="muted" style={{ fontSize: 13 }}>No joints yet. Ask Bot, e.g. “add a hinge between the lid and the box”.</p>}
+        </>
+      )}
       {!ep && <div className="sect matehead">Mates<span>{CONNS.length}</span></div>}
       {!ep && CONNS.map((c, i) => {
         const mt = MATE_TYPES.find((m) => m.id === c.type);
@@ -184,7 +204,11 @@ function EngineCodeTab() {
   const s = useApp();
   const ep = engineParts(s) ?? [];
   const files = s.eng?.files ?? {};
-  const partFiles = Object.keys(files).filter((f) => f.startsWith('parts/') && f.endsWith('.py')).sort();
+  // part scripts first, then shared modules (lib/*.py) that parts import
+  const partFiles = [
+    ...Object.keys(files).filter((f) => f.startsWith('parts/') && f.endsWith('.py')).sort(),
+    ...Object.keys(files).filter((f) => f.startsWith('lib/') && f.endsWith('.py')).sort(),
+  ];
   const selFile = ep.find((p) => p.id === s.selected)?.file;
   const [file, setFile] = useState<string>(selFile ?? partFiles[0] ?? '');
   const [draft, setDraft] = useState<Record<string, string>>({});
@@ -193,9 +217,9 @@ function EngineCodeTab() {
   const text = draft[cur] ?? files[cur] ?? '';
   const dirty = draft[cur] !== undefined && draft[cur] !== files[cur];
   const part = ep.find((p) => p.file === cur);
-  const partId = cur.replace(/^parts\//, '').replace(/\.py$/, '');
+  const partId = cur.replace(/^(parts|lib)\//, '').replace(/\.py$/, '');
   const save = async () => {
-    await savePart(partId, text);
+    await savePart(partId, text, cur.startsWith('lib/'));
     setDraft((d) => { const n = { ...d }; delete n[cur]; return n; });
   };
   if (!partFiles.length) return <p className="muted" style={{ fontSize: 13 }}>This version has no part files yet.</p>;

@@ -42,9 +42,12 @@ class BotTask:
     calls: list[dict[str, Any]] = field(default_factory=list)
     tokens: int = 0
     group: str | None = None
+    thread: str | None = None  # the conversation this task continues (the first task's id)
+    notes: list[int] = field(default_factory=list)  # 3D comments this task works on
     concept: str | None = None
     mass_kg: float | None = None
     builds: bool | None = None
+    branches: list[str] = field(default_factory=list)
     stop_requested: bool = False
 
     def to_json(self) -> dict[str, Any]:
@@ -120,8 +123,9 @@ class BotManager:
         self.engine.events.publish({"type": "bot.message", "project": pid, "message": msg})
         return msg
 
-    def _recent(self, pid: str, n: int = 8) -> str:
-        msgs = [m for m in self.chat(pid) if m.get("who") in ("you", "bot")][-n:]
+    def _recent(self, pid: str, n: int = 8, thread: str | None = None) -> str:
+        msgs = [m for m in self.chat(pid) if m.get("who") in ("you", "bot")
+                and (not thread or thread in (m.get("thread"), m.get("task")))][-n:]
         return "\n".join(f"{'User' if m['who'] == 'you' else 'Bot'}: {m['text']}" for m in msgs)
 
     # ---------- running a task ----------
@@ -162,18 +166,27 @@ class BotManager:
                              on_step=on_step, should_stop=lambda: t.stop_requested)
         t.calls, t.tokens, t.reply, t.problem = res.calls, res.tokens, res.text, res.problem
         t.status = res.status
+        first = t.branch
+        branches = res.branches or [first]
         # anything the Bot staged but didn't commit is saved, so no work is lost
-        if p.staged(t.branch):
-            p.commit(t.branch, f"Bot: {t.goal[:60]}", BOT)
+        for b in branches:
+            if p.is_branch(b) and p.staged(b):
+                p.commit(b, f"Bot: {t.goal[:60]}", BOT)
         base = p.resolve(t.base)
-        tip = p.resolve(t.branch)
-        if tip.id != base.id:
-            t.commits = [c.to_json() for c in p.log() if c.branch == t.branch][-10:]
+        kept = []
+        for b in branches:
+            if not p.is_branch(b):
+                continue
+            if p.resolve(b).id != base.id:
+                kept.append(b)
+            elif t.mode in ("change", "comment") and b != p.head_branch():
+                p.delete_branch(b)  # a question with no changes leaves no branch behind
+        t.branches = kept
+        t.branch = res.branch if res.branch in kept else (kept[-1] if kept else "")
+        if t.branch:
+            t.commits = [c.to_json() for c in p.log() if c.branch in kept][-10:]
             man = await self.engine.geometry.build(p, t.branch)
             t.mass_kg, t.builds = man["mass_kg"], man["ok"]
-        elif t.mode in ("change", "comment") and t.branch != p.head_branch():
-            p.delete_branch(t.branch)  # a question with no changes leaves no branch behind
-            t.branch = ""
         return res
 
     async def _after(self, t: BotTask) -> None:
@@ -185,8 +198,11 @@ class BotManager:
         if t.status != "done":
             text = (text + "\n\n" if text else "") + (t.problem or "The task stopped.")
         if t.branch and t.commits and t.mode in ("change", "comment", "draft"):
+            others = [b for b in t.branches if b != t.branch]
             text += f"\n\nIt's on branch {t.branch}. Review it, then apply it or check it out."
-        self.say(t.project, "bot", text.strip() or "Done.", task=t.id, branch=t.branch or None,
+            if others:
+                text += f" I also tried {', '.join(others)}; you'll find {'them' if len(others) > 1 else 'it'} in the version history."
+        self.say(t.project, "bot", text.strip() or "Done.", task=t.id, thread=t.thread, branch=t.branch or None, source="comment" if t.mode == "comment" else "chat",
                  actions=["apply", "checkout"] if t.branch and t.commits else [])
 
     def _bot_branch(self, pid: str, name: str, from_ref: str | None = None) -> tuple[str, str]:
@@ -197,13 +213,20 @@ class BotManager:
 
     # ---------- public entry points ----------
 
-    def start_change(self, pid: str, message: str, selected: str | None = None, from_ref: str | None = None) -> BotTask:
+    def start_change(self, pid: str, message: str, selected: str | None = None, from_ref: str | None = None,
+                     thread: str | None = None) -> BotTask:
+        """A chat request. With `thread`, it continues that conversation: it starts from the branch the
+        conversation's last task produced and its messages stay in the same thread."""
         self._check_ready(pid)
         p = self.engine.store.get(pid)
-        recent = self._recent(pid)
-        self.say(pid, "you", message, ctx=selected)
+        recent = self._recent(pid, thread=thread)
+        if thread and from_ref is None:
+            prev = [x for x in self.tasks.values() if x.project == pid and (x.id == thread or x.thread == thread) and x.branch]
+            if prev and p.is_branch(prev[-1].branch):
+                from_ref = prev[-1].branch
         b, base = self._bot_branch(pid, f"bot/{slugify(message, 'change')[:24]}", from_ref)
-        t = self._new_task(pid, "change", message, b, base)
+        t = self._new_task(pid, "change", message, b, base, thread=thread)
+        self.say(pid, "you", message, ctx=selected, task=t.id, source="chat", thread=thread)
         spec = p.read_yaml("spec.yaml", b) or {}
         prompt = (f"User request: {message}\n"
                   + (f"The user has the part '{selected}' selected; the request is probably about it.\n" if selected else "")
@@ -219,8 +242,16 @@ class BotManager:
         chosen = [n for n in notes if n["id"] in note_ids]
         if not chosen:
             raise StoreError("No such comments")
-        b, base = self._bot_branch(pid, f"bot/comment-{chosen[0]['id']}")
-        t = self._new_task(pid, "comment", f"Comment {', '.join('#' + str(n['id']) for n in chosen)}", b, base)
+        # a follow-up on a comment continues its conversation and builds on its branch
+        ids = [n["id"] for n in chosen]
+        prev = [x for x in self.tasks.values() if x.project == pid and x.mode == "comment" and set(x.notes) & set(ids)]
+        thread = (prev[0].thread or prev[0].id) if prev else None
+        from_ref = prev[-1].branch if prev and prev[-1].branch and p.is_branch(prev[-1].branch) else None
+        b, base = self._bot_branch(pid, f"bot/comment-{chosen[0]['id']}", from_ref)
+        t = self._new_task(pid, "comment", f"Comment {', '.join('#' + str(n['id']) for n in chosen)}", b, base, thread=thread, notes=ids)
+        for n in chosen:
+            last = next((m["text"] for m in reversed(n["msgs"]) if m.get("who") != "Bot"), n["msgs"][-1]["text"] if n["msgs"] else "")
+            self.say(pid, "you", last, ctx=n["part"], task=t.id, thread=thread, source="comment", note=n["id"])
         lines = [f"#{n['id']} on part {n['part']}" + (f" (face {n['face']}, point {n.get('point')})" if n.get("face") else "") + ": "
                  + " / ".join(f"{m['who']}: {m['text']}" for m in n["msgs"]) for n in chosen]
         self._launch(t, "Queued 3D comments:\n" + "\n".join(lines))
@@ -235,7 +266,7 @@ class BotManager:
         letters = list(CONCEPT_DIRECTIONS)[:max(1, min(count, 3))]
         group: dict[str, Any] = {"id": gid, "project": pid, "tasks": [], "status": "running", "started": time.time()}
         self.groups[gid] = group
-        self.say(pid, "you", f"Generate {len(letters)} prototypes")
+        self.say(pid, "you", f"Generate {len(letters)} prototypes", group=gid, source="generate")
         for L in letters:
             b, base = self._bot_branch(pid, f"concept-{L.lower()}", from_ref)
             t = self._new_task(pid, "concept", CONCEPT_DIRECTIONS[L], b, base, group=gid, concept=L)
@@ -267,7 +298,7 @@ class BotManager:
         ok = [t for t in ts if t.builds]
         head = (f"{len(ok)} of {len(ts)} concepts are ready, each on its own branch. Nothing was applied to your version; "
                 "open the history to compare them and check one out.") if ok else "None of the concepts built. " + (ts[0].problem if ts else "")
-        self.say(g["project"], "bot", head + "\n\n" + "\n".join(lines), group=gid, actions=["history"] if ok else [])
+        self.say(g["project"], "bot", head + "\n\n" + "\n".join(lines), group=gid, source="generate", actions=["history"] if ok else [])
         self.engine.events.publish({"type": "bot.group", "group": self.group_json(gid)})
 
     def start_draft(self, pid: str) -> BotTask | None:
@@ -334,7 +365,7 @@ class BotManager:
             done = qid is None
             msg = asked.get("message") or ("That's everything I need." if done else "")
             if msg:
-                self.say(pid, "bot", msg, question=qid)
+                self.say(pid, "bot", msg, question=qid, source="interview")
             settings = self.model_settings(pid)
             answered_n = sum(1 for _, q in S.questions(spec) if q.get("answers"))
             if settings.get("build_while_interview") and (done or (answered_n and answered_n % 4 == 0)):

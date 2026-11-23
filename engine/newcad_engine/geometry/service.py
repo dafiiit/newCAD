@@ -23,11 +23,18 @@ TOLERANCE = 0.1
 ANGULAR = 0.3
 
 
-def part_key(source: str) -> str:
+def part_key(source: str, modules: dict[str, str] | None = None) -> str:
     h = hashlib.sha256()
     h.update(json.dumps([GEOMETRY_VERSION, TOLERANCE, ANGULAR]).encode())
     h.update(source.encode())
+    if modules:  # shared modules change every part's key (simple and safe)
+        h.update(json.dumps(sorted(modules.items())).encode())
     return h.hexdigest()[:32]
+
+
+def modules_of(files: dict[str, str]) -> dict[str, str]:
+    """Shared Python modules of a project: lib/<name>.py, importable from part scripts as <name>."""
+    return {path[4:-3]: src for path, src in files.items() if path.startswith("lib/") and path.endswith(".py") and "/" not in path[4:]}
 
 
 class GeometryService:
@@ -42,8 +49,8 @@ class GeometryService:
             raise StoreError("bad cache key")
         return self.cache / key
 
-    async def build_part(self, part_id: str, source: str) -> dict[str, Any]:
-        key = part_key(source)
+    async def build_part(self, part_id: str, source: str, modules: dict[str, str] | None = None) -> dict[str, Any]:
+        key = part_key(source, modules)
         d = self.entry(key)
         lock = self._locks.setdefault(key, asyncio.Lock())
         async with lock:
@@ -54,14 +61,14 @@ class GeometryService:
             tmp = self.cache / f".tmp-{key}-{time.time_ns()}"
             tmp.mkdir(parents=True)
             res = await self.pool.run({"job": "build", "source": source, "part_id": part_id, "out_dir": str(tmp),
-                                       "filename": f"parts/{part_id}.py", "tolerance": TOLERANCE, "angular_tolerance": ANGULAR})
+                                       "filename": f"parts/{part_id}.py", "modules": modules or {}, "tolerance": TOLERANCE, "angular_tolerance": ANGULAR})
             if res.get("ok"):
                 if d.exists():
                     shutil.rmtree(d, ignore_errors=True)
                 tmp.rename(d)
                 return {"ok": True, "key": key, "cached": False, "meta": res["meta"], "log": res.get("log", "")}
             shutil.rmtree(tmp, ignore_errors=True)
-            err = {"ok": False, "error": res.get("error", "build failed"), "line": res.get("line"), "log": res.get("log", "")[-4000:]}
+            err = {"ok": False, "error": res.get("error", "build failed"), "line": res.get("line"), "file": res.get("file"), "log": res.get("log", "")[-4000:]}
             # cache deterministic code errors, not timeouts or crashes
             if "line" in res and res.get("line") is not None:
                 d.mkdir(parents=True, exist_ok=True)
@@ -74,6 +81,7 @@ class GeometryService:
         commit = project.resolve(ref)
         files = project.files(ref)
         asm = _assembly_from(files)
+        modules = modules_of(files)
         todo = [p for p in asm["parts"] if not parts or p["id"] in parts]
 
         async def one(p: dict[str, Any]) -> dict[str, Any]:
@@ -82,9 +90,10 @@ class GeometryService:
                     "file": p.get("file") or f"parts/{p['id']}.py"}
             if src is None:
                 return {**base, "ok": False, "error": f"Missing file {base['file']}"}
-            r = await self.build_part(p["id"], src)
+            r = await self.build_part(p["id"], src, modules)
             if not r["ok"]:
-                return {**base, "ok": False, "key": r["key"], "error": r["error"], "line": r.get("line"), "log": r.get("log", "")}
+                err = r["error"] if not r.get("file") else f"{r['error']} (in {r['file']})"
+                return {**base, "ok": False, "key": r["key"], "error": err, "line": r.get("line"), "errorFile": r.get("file") or base["file"], "log": r.get("log", "")}
             m = r["meta"]
             if p.get("mass_kg") is not None:  # bought-in part with a known mass
                 mass = float(p["mass_kg"])
