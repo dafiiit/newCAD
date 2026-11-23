@@ -148,6 +148,57 @@ class Export(BaseModel):
     parts: list[str] | None = None
 
 
+class NewStudy(BaseModel):
+    name: str = Field(min_length=1, max_length=80)
+    type: str = "static"
+
+
+class StudyPatch(BaseModel):
+    name: str | None = None
+    materials: dict[str, str] | None = None
+    mesh: dict[str, Any] | None = None
+    modes: int | None = None
+    safety_target: float | None = None
+    target: str | None = None
+    parts: list[str] | None = None
+
+
+class FacePick(BaseModel):
+    part: str
+    tag: str
+    key: str | None = None  # cache key of the build the tag comes from (to store its signature)
+
+
+class BoundaryBody(BaseModel):
+    type: str
+    label: str = ""
+    faces: list[FacePick] = Field(default_factory=list)
+    vector: list[float] | None = None
+    value: float | None = None
+    ambient: float | None = None
+
+
+class Measure(BaseModel):
+    kind: str
+    a: str
+    b: str
+    ref: str | None = None
+
+
+class RunStudy(BaseModel):
+    ref: str | None = None
+    priority: int = 0
+    target: str | None = None
+    force: bool = False
+
+
+class NewTarget(BaseModel):
+    name: str = Field(min_length=1, max_length=60)
+    url: str = Field(pattern=r"^https?://")
+    token: str = Field(min_length=8)
+    slots: int = Field(default=1, ge=1, le=64)
+
+
 def create_app(engine: Engine | None = None) -> FastAPI:
     eng = engine or Engine()
     mcp_app = eng.mcp.streamable_http_app(streamable_http_path="/", stateless_http=True, json_response=True)
@@ -476,6 +527,204 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     @app.post("/api/bot/tasks/{tid}/stop")
     async def stop_task(tid: str) -> dict[str, Any]:
         return eng.bot.stop(tid).to_json()
+
+
+    # ---------- simulation: studies, jobs, results, compute targets ----------
+
+    from ..sim import materials as MAT
+
+    def study_json(st, state: dict[str, Any] | None = None) -> dict[str, Any]:
+        d = st.to_yaml_dict()
+        if state is not None:
+            d["state"] = state
+        return d
+
+    def face_refs(p, faces: list[FacePick]) -> list[dict[str, Any]]:
+        out = []
+        for f in faces:
+            sig = None
+            if f.key:
+                meta = eng.geometry.meta(f.key) or {"faces": []}
+                sig = next(({k: v for k, v in x.items() if k != "tag"} for x in meta["faces"] if x["tag"] == f.tag), None)
+            out.append({"part": f.part, "tag": f.tag, "sig": sig})
+        return out
+
+    @app.post("/api/projects/{pid}/measure")
+    async def measure(pid: str, body: Measure) -> dict[str, Any]:
+        """Exact OCCT checks between two parts (no solver): distance or clash with overlap volume."""
+        if body.kind not in ("distance", "clash"):
+            raise HTTPException(400, "kind must be distance or clash")
+        return await eng.geometry.measure(proj(pid), body.ref, body.kind, body.a, body.b)
+
+    @app.get("/api/materials")
+    async def materials() -> list[dict[str, Any]]:
+        return [MAT.lookup(n) for n in MAT.names()]
+
+    @app.get("/api/projects/{pid}/studies")
+    async def list_studies(pid: str, ref: str | None = None, state: bool = True) -> list[dict[str, Any]]:
+        p = proj(pid)
+        out = []
+        for st in eng.sim.list(p, ref):
+            out.append(study_json(st, await eng.sim.state(p, st.id, ref) if state else None))
+        return out
+
+    @app.post("/api/projects/{pid}/studies")
+    async def new_study(pid: str, body: NewStudy) -> dict[str, Any]:
+        p = proj(pid)
+        return study_json(eng.sim.create(p, body.name, body.type, None, YOU))
+
+    @app.get("/api/projects/{pid}/studies/{sid}")
+    async def get_study(pid: str, sid: str, ref: str | None = None) -> dict[str, Any]:
+        p = proj(pid)
+        return study_json(eng.sim.read(p, sid, ref), await eng.sim.state(p, sid, ref))
+
+    @app.patch("/api/projects/{pid}/studies/{sid}")
+    async def patch_study(pid: str, sid: str, body: StudyPatch) -> dict[str, Any]:
+        p = proj(pid)
+        cur = eng.sim.read(p, sid).to_yaml_dict()
+        patch = body.model_dump(exclude_unset=True)
+        if "mesh" in patch and patch["mesh"] is not None:
+            patch["mesh"] = {**cur.get("mesh", {}), **patch["mesh"]}
+        st = eng.sim.replace(p, sid, {**cur, **patch}, None, YOU)
+        return study_json(st, await eng.sim.state(p, sid))
+
+    @app.delete("/api/projects/{pid}/studies/{sid}")
+    async def delete_study(pid: str, sid: str) -> dict[str, Any]:
+        eng.sim.delete(proj(pid), sid, None, YOU)
+        return {"ok": True}
+
+    @app.post("/api/projects/{pid}/studies/{sid}/boundaries")
+    async def add_boundary(pid: str, sid: str, body: BoundaryBody) -> dict[str, Any]:
+        p = proj(pid)
+        st = eng.sim.read(p, sid)
+        d = st.to_yaml_dict()
+        b = {k: v for k, v in body.model_dump().items() if v is not None and k != "faces"}
+        b["id"] = st.next_boundary_id(body.type)
+        b["faces"] = face_refs(p, body.faces)
+        d.setdefault("boundaries", []).append(b)
+        st = eng.sim.replace(p, sid, d, None, YOU)
+        return study_json(st, await eng.sim.state(p, sid))
+
+    @app.put("/api/projects/{pid}/studies/{sid}/boundaries/{bid}")
+    async def put_boundary(pid: str, sid: str, bid: str, body: BoundaryBody) -> dict[str, Any]:
+        p = proj(pid)
+        d = eng.sim.read(p, sid).to_yaml_dict()
+        bs = d.get("boundaries", [])
+        i = next((i for i, b in enumerate(bs) if b.get("id") == bid), None)
+        if i is None:
+            raise HTTPException(404, f"No boundary condition {bid}")
+        b = {k: v for k, v in body.model_dump().items() if v is not None and k != "faces"}
+        b["id"] = bid
+        b["faces"] = face_refs(p, body.faces)
+        bs[i] = b
+        st = eng.sim.replace(p, sid, d, None, YOU)
+        return study_json(st, await eng.sim.state(p, sid))
+
+    @app.delete("/api/projects/{pid}/studies/{sid}/boundaries/{bid}")
+    async def del_boundary(pid: str, sid: str, bid: str) -> dict[str, Any]:
+        p = proj(pid)
+        d = eng.sim.read(p, sid).to_yaml_dict()
+        d["boundaries"] = [b for b in d.get("boundaries", []) if b.get("id") != bid]
+        st = eng.sim.replace(p, sid, d, None, YOU)
+        return study_json(st, await eng.sim.state(p, sid))
+
+    @app.post("/api/projects/{pid}/studies/{sid}/run")
+    async def run_study(pid: str, sid: str, body: RunStudy) -> dict[str, Any]:
+        job = await eng.sim.run(proj(pid), sid, body.ref, body.priority, body.target, body.force)
+        return job.to_json()
+
+    @app.get("/api/jobs")
+    async def jobs(project: str | None = None) -> list[dict[str, Any]]:
+        return [j.to_json() for j in eng.jobs.list(project)]
+
+    @app.post("/api/jobs/{jid}/cancel")
+    async def cancel_job(jid: str) -> dict[str, Any]:
+        if not eng.jobs.get(jid):
+            raise HTTPException(404, "No such job")
+        return (await eng.jobs.cancel(jid)).to_json()
+
+    @app.post("/api/jobs/{jid}/retry")
+    async def retry_job(jid: str) -> dict[str, Any]:
+        if not eng.jobs.get(jid):
+            raise HTTPException(404, "No such job")
+        return (await eng.jobs.retry(jid)).to_json()
+
+    RESULT_TYPES = {"field.glb": "model/gltf-binary", "result.json": "application/json", "result.vtu": "application/octet-stream",
+                    "mesh.msh": "application/octet-stream"}
+
+    @app.get("/api/results/{key}/{name}")
+    async def result_file(key: str, name: str) -> Response:
+        if name not in RESULT_TYPES:
+            raise HTTPException(404, "No such file")
+        try:
+            f = eng.jobs.result_dir(key) / name
+        except ValueError:
+            raise HTTPException(400, "Bad key") from None
+        if not f.exists():
+            raise HTTPException(404, "No result")
+        dl = {"filename": f"{key[:8]}-{name}"} if name in ("result.vtu", "mesh.msh") else {}
+        return FileResponse(f, media_type=RESULT_TYPES[name], headers={"Cache-Control": "private, max-age=31536000, immutable"}, **dl)
+
+    @app.get("/api/targets")
+    async def targets() -> list[dict[str, Any]]:
+        busy: dict[str, int] = {}
+        for j in eng.jobs.list():
+            if j.status == "running" and j.target:
+                busy[j.target] = busy.get(j.target, 0) + 1
+        return [{**t, "running": busy.get(t["id"], 0)} for t in await eng.targets.describe()]
+
+    @app.post("/api/targets")
+    async def add_target(body: NewTarget) -> dict[str, Any]:
+        from ..jobs.targets import RemoteTarget
+        from ..project.store import slugify
+        tid = slugify(body.name, "node")
+        if tid == "local" or eng.targets.get(tid):
+            tid = f"{tid}-{len(eng.targets.remote) + 2}"
+        t = eng.targets.add(RemoteTarget(tid, body.name, body.url, body.token, body.slots))
+        d = await t.describe()
+        eng.events.publish({"type": "targets.changed"})
+        return d
+
+    @app.delete("/api/targets/{tid}")
+    async def del_target(tid: str) -> dict[str, Any]:
+        if not eng.targets.remove(tid):
+            raise HTTPException(404, "No such remote target")
+        eng.events.publish({"type": "targets.changed"})
+        return {"ok": True}
+
+    # ---------- compute-node side (a remote target talks to these) ----------
+
+    @app.get("/api/worker/info")
+    async def worker_info() -> dict[str, Any]:
+        return await eng.worker.info()
+
+    @app.post("/api/worker/jobs")
+    async def worker_submit(request: Request) -> dict[str, Any]:
+        body = await request.body()
+        if len(body) > 2_000_000_000:
+            raise HTTPException(413, "Bundle too large")
+        try:
+            return (await eng.worker.submit(body)).to_json()
+        except ValueError as e:
+            raise HTTPException(400, str(e)) from None
+
+    @app.get("/api/worker/jobs/{jid}")
+    async def worker_job(jid: str) -> dict[str, Any]:
+        j = eng.worker.get(jid)
+        if not j:
+            raise HTTPException(404, "No such job")
+        return j.to_json()
+
+    @app.get("/api/worker/jobs/{jid}/result.tar.gz")
+    async def worker_result(jid: str) -> Response:
+        data = await eng.worker.result(jid)
+        if data is None:
+            raise HTTPException(404, "No result")
+        return Response(data, media_type="application/gzip")
+
+    @app.delete("/api/worker/jobs/{jid}")
+    async def worker_cancel(jid: str) -> dict[str, Any]:
+        return {"ok": eng.worker.cancel(jid)}
 
     # ---------- events ----------
 

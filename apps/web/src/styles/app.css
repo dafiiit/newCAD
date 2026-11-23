@@ -779,3 +779,36 @@ select.codefile{border:1px solid #ddd;border-radius:999px;padding:4px 10px;backg
 .engbadge .dot{width:8px;height:8px;border-radius:50%;background:#16A34A}
 .engbadge .dot.off{background:#B42318}
 .histthumb{width:100%;height:100%;object-fit:contain}
+
+/* engine Check tab: supports and loads, face picking, job progress, compute targets */
+.iconbtn.sm{width:26px;height:26px;border-radius:8px}
+.iconbtn.sm:hover{background:#f0f0ec}
+.simadd{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin-top:4px}
+.simadd .pillbtn{height:30px;padding:0 11px;font-size:12px}
+.bcrow,.targetrow{display:flex;align-items:center;gap:8px;padding:4px 0}
+.bcbody{display:flex;flex-direction:column;flex:1;min-width:0;font-size:13px;line-height:1.3}
+.bcbody .muted{font-size:12px;overflow-wrap:anywhere}
+.bcdot{width:10px;height:10px;border-radius:3px;flex:none;background:#bbb}
+.bcdot.sup{background:#1D4ED8}
+.bcdot.load{background:#D9480F}
+.bcdot.on{background:#15803D;border-radius:50%}
+.bcdot.off{background:#bbb;border-radius:50%}
+.bcpick{display:flex;flex-direction:column;gap:6px;border:1.5px dashed #D9480F;border-radius:12px;padding:10px;margin-top:4px}
+.simin{width:64px;height:28px;border:1.5px solid #111;border-radius:8px;padding:0 6px;font:inherit;font-size:13px;background:#fff;box-sizing:border-box}
+.simin.wide{width:100%}
+.siminwrap{display:inline-flex;align-items:center;gap:4px}
+.vecin{display:flex;gap:6px;align-items:center;flex-wrap:wrap;font-size:12px}
+.vecin label{display:inline-flex;align-items:center;gap:3px}
+.vecin .simin{width:58px}
+.simjob{display:flex;flex-direction:column;gap:4px}
+.simbar{height:6px;border-radius:3px;background:#ecece8;overflow:hidden}
+.simbar span{display:block;height:100%;background:#1D4ED8;transition:width .3s}
+.simnote{font-size:12px;margin:2px 0;color:#7a3b00;background:#FFF4E5;border-radius:8px;padding:6px 8px;display:flex;gap:8px;align-items:baseline;justify-content:space-between}
+.simnote.fail{color:#9F1D1D;background:#FDECEC}
+.simbad{color:#B91C1C}
+.stbadge.fail{border-color:#B91C1C;color:#B91C1C;background:#FDECEC}
+.simlegend{align-items:center;gap:6px}
+.simlegend input{width:56px;border:0;border-bottom:1px dashed #999;background:transparent;font:inherit;font-size:11px;color:#555;padding:0}
+.simlegend span{text-align:center;flex:1}
+.app.dark .simin{border-color:#a5a5a5}
+.app.dark .bcpick{border-color:#D9480F}

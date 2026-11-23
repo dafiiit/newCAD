@@ -35,7 +35,7 @@ from .templates import new_project_files
 BOT = ("Bot", "bot@newcad.local")
 YOU = ("You", "you@newcad.local")
 
-# Small edits to these files by the same author are folded into one commit,
+# Small edits to these files (and studies/*.yaml) by the same author are folded into one commit,
 # so answering ten questions doesn't produce ten versions.
 COALESCE_FILES = {"spec.yaml", "notes.yaml"}
 COALESCE_SECONDS = 15 * 60
@@ -218,12 +218,12 @@ class Project:
             tree = self._build_tree(files)
             parents = [parent.id]
             # fold small spec/notes edits into the previous commit of the same kind
-            if set(touched) <= COALESCE_FILES and _coalescible(parent, author, touched):
+            if _soft(touched) and _coalescible(parent, author, touched):
                 parents = [p.id for p in parent.parents]
                 message = parent.message.strip()
             sig = pygit2.Signature(author[0], author[1])
             msg = message.strip() + "\n"
-            if set(touched) <= COALESCE_FILES:
+            if _soft(touched):
                 msg += f"\nNewcad-Edit: {','.join(sorted(touched))}\n"
             oid = self.repo.create_commit(None, sig, sig, msg, tree, parents)
             self.repo.branches.local[b].set_target(oid)
@@ -382,6 +382,11 @@ class Project:
 def _check_path(p: str) -> None:
     if p.startswith("/") or ".." in p.split("/") or not re.fullmatch(r"[A-Za-z0-9_./-]+", p):
         raise StoreError(f"Invalid file path {p!r}")
+
+
+def _soft(paths: Iterable[str]) -> bool:
+    """Small setup files whose edits fold into one version: the spec, notes and study files."""
+    return all(p in COALESCE_FILES or (p.startswith("studies/") and p.endswith(".yaml")) for p in paths)
 
 
 def _coalescible(c: pygit2.Commit, author: tuple[str, str], touched: Iterable[str]) -> bool:

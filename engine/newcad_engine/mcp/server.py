@@ -29,15 +29,17 @@ INSTRUCTIONS = """NewCAD is a CAD tool where designs are build123d Python script
 - The What? spec (spec.yaml) holds the requirements as questions and answers. Read it before designing.
 - Edits are staged on a branch; project_commit turns them into a version. Branches are concepts, commits are versions.
 - After writing code, call geometry_rebuild and fix any error it reports before committing.
-- view_snapshot returns a picture of the current state so you can check the result visually."""
+- view_snapshot returns a picture of the current state so you can check the result visually.
+- Simulation: sim_create_study, then sim_list_faces to find face tags, sim_add_boundary for supports and loads, sim_run to solve (Gmsh + CalculiX). Units mm, N, MPa."""
 
 ReadRef = Annotated[str | None, Field(description="Branch name or commit id to read. Default: the user's current version (HEAD).")]
 WriteBranch = Annotated[str | None, Field(description="Branch to change. Default: the branch the user has checked out.")]
 ProjectId = Annotated[str, Field(description="Project id from project_list.")]
+StudyId = Annotated[str, Field(description="Study id from sim_list_studies")]
 
 
 def build_mcp(engine: Any) -> MCPServer:
-    mcp = MCPServer("newcad", title="NewCAD", instructions=INSTRUCTIONS, version="0.2.0")
+    mcp = MCPServer("newcad", title="NewCAD", instructions=INSTRUCTIONS, version="0.3.0")
     store = engine.store
     geo = engine.geometry
 
@@ -391,6 +393,185 @@ def build_mcp(engine: Any) -> MCPServer:
         n["status"] = "resolved"
         save_yaml(p, b, "notes.yaml", notes, f"Resolve comment {note_id}")
         return f"Comment {note_id} resolved."
+
+    # ---------- sim.* ----------
+
+    sim = engine.sim
+    from ..sim import materials as MAT
+    from ..sim.service import summary_text
+
+    AXES = {"+x": (0, 1), "-x": (0, -1), "+y": (1, 1), "-y": (1, -1), "+z": (2, 1), "-z": (2, -1)}
+
+    @tool("sim_list_studies", read_only=True)
+    async def sim_list_studies(project: ProjectId, ref: ReadRef = None) -> str:
+        """Simulation studies of the project (static stress, modal, thermal) with their setup and whether a result exists."""
+        p = proj(project)
+        ref = rref(p, ref)
+        out = []
+        for st in sim.list(p, ref):
+            state = await sim.state(p, st.id, ref)
+            out.append({"id": st.id, "name": st.name, "type": st.type, "boundaries": [b.model_dump(exclude_none=True, exclude={"faces": {"__all__": {"sig"}}}) for b in st.boundaries],
+                        "materials": st.materials, "mesh": st.mesh.model_dump(), "status": state["status"],
+                        **({"problem": state["problem"]} if state.get("problem") else {})})
+        return json.dumps(out, indent=1) if out else "No studies yet. Create one with sim_create_study."
+
+    @tool("sim_list_faces", read_only=True)
+    async def sim_list_faces(project: ProjectId, part: str, ref: ReadRef = None,
+                             facing: Annotated[Literal["+x", "-x", "+y", "-y", "+z", "-z"] | None,
+                                               Field(description="Only planar faces whose outward normal points this way")] = None) -> str:
+        """Faces of a part with their stable tags, surface type, area (mm²), centre and normal. Use the tags to place boundary conditions."""
+        p = proj(project)
+        ref = rref(p, ref)
+        man = await geo.build(p, ref, [part])
+        x = next((q for q in man["parts"] if q["id"] == part), None)
+        if x is None:
+            raise StoreError(f"No part {part!r}")
+        if not x["ok"]:
+            raise StoreError(f"{part} doesn't build: {x['error']}")
+        faces = (geo.meta(x["key"]) or {"faces": []})["faces"]
+        if facing:
+            ax, sgn = AXES[facing]
+            faces = [f for f in faces if f.get("normal") and f["normal"][ax] * sgn > 0.98]
+        rows = [{"tag": f["tag"], "type": f["type"], "area": round(f["area"], 2), "center": [round(c, 2) for c in f["center"]],
+                 **({"normal": [round(c, 3) for c in f["normal"]]} if f.get("normal") else {})} for f in faces]
+        return json.dumps(rows) if rows else "No matching faces."
+
+    @tool("sim_create_study")
+    async def sim_create_study(project: ProjectId, name: Annotated[str, Field(description="e.g. 'Bracket under shelf load'")],
+                               type: Literal["static", "modal", "thermal"] = "static", branch: WriteBranch = None) -> str:
+        """Create an empty study. Then add boundary conditions with sim_add_boundary and run it with sim_run."""
+        p = proj(project)
+        b = wbranch(p, branch)
+        st = sim.create(p, name, type, b, current_actor.get().author)
+        return f"Created study {st.id} ({type}) on {b}."
+
+    @tool("sim_add_boundary")
+    async def sim_add_boundary(project: ProjectId, study: StudyId,
+                               type: Annotated[Literal["fixed", "force", "pressure", "gravity", "temperature", "heat_flux", "convection"],
+                                               Field(description="static: fixed, force, pressure, gravity. modal: fixed. thermal: temperature, heat_flux, convection")],
+                               part: Annotated[str | None, Field(description="Part the faces belong to (not needed for gravity)")] = None,
+                               faces: Annotated[list[str] | None, Field(description="Face tags from sim_list_faces")] = None,
+                               vector: Annotated[list[float] | None, Field(description="force: total N [x,y,z] shared over the faces; gravity: m/s², e.g. [0,0,-9.81]")] = None,
+                               value: Annotated[float | None, Field(description="pressure MPa, temperature °C, heat_flux W total, convection W/(m²·K)")] = None,
+                               ambient: Annotated[float | None, Field(description="convection: ambient °C")] = None,
+                               label: Annotated[str, Field(description="Short name, e.g. 'Wall bolts'")] = "",
+                               branch: WriteBranch = None) -> str:
+        """Add a boundary condition (support or load) on faces of a part."""
+        p = proj(project)
+        b = wbranch(p, branch)
+        st = sim.read(p, study, b)
+        refs = []
+        if faces:
+            if not part:
+                raise StoreError("Give the part the faces belong to")
+            man = await geo.build(p, b, [part])
+            x = next((q for q in man["parts"] if q["id"] == part), None)
+            if x is None or not x["ok"]:
+                raise StoreError(f"Part {part} is missing or doesn't build")
+            meta = {f["tag"]: f for f in (geo.meta(x["key"]) or {"faces": []})["faces"]}
+            for t in faces:
+                if t not in meta:
+                    raise StoreError(f"No face {t} on {part}. Use sim_list_faces to get current tags.")
+                refs.append({"part": part, "tag": t, "sig": {k: v for k, v in meta[t].items() if k != "tag"}})
+        d = st.to_yaml_dict()
+        bid = st.next_boundary_id(type)
+        d.setdefault("boundaries", []).append({"id": bid, "type": type, "label": label, "faces": refs, "vector": vector,
+                                               "value": value, "ambient": ambient})
+        sim.replace(p, study, {**d, "boundaries": [{k: v for k, v in x.items() if v is not None} for x in d["boundaries"]]},
+                    b, current_actor.get().author)
+        return f"Added {type} {bid} to {study}."
+
+    @tool("sim_remove_boundary", destructive=True)
+    async def sim_remove_boundary(project: ProjectId, study: StudyId, boundary: Annotated[str, Field(description="Boundary id, e.g. force-1")],
+                                  branch: WriteBranch = None) -> str:
+        """Remove one boundary condition from a study."""
+        p = proj(project)
+        b = wbranch(p, branch)
+        d = sim.read(p, study, b).to_yaml_dict()
+        before = len(d.get("boundaries", []))
+        d["boundaries"] = [x for x in d.get("boundaries", []) if x.get("id") != boundary]
+        if len(d["boundaries"]) == before:
+            raise StoreError(f"No boundary {boundary} in {study}")
+        sim.replace(p, study, d, b, current_actor.get().author)
+        return f"Removed {boundary}."
+
+    @tool("sim_configure")
+    async def sim_configure(project: ProjectId, study: StudyId,
+                            materials: Annotated[dict[str, str] | None, Field(description="Part id → material, overrides the part's material in this study")] = None,
+                            mesh_size: Annotated[float | None, Field(description="Element size in mm (smaller = more accurate and slower). 0 = automatic")] = None,
+                            modes: Annotated[int | None, Field(description="modal: number of modes")] = None,
+                            safety_target: Annotated[float | None, Field(description="static: required safety factor against yield")] = None,
+                            parts: Annotated[list[str] | None, Field(description="Only these parts (default all, bonded where they touch)")] = None,
+                            branch: WriteBranch = None) -> str:
+        """Change study settings: materials, mesh size, number of modes, safety target, parts included."""
+        p = proj(project)
+        b = wbranch(p, branch)
+        d = sim.read(p, study, b).to_yaml_dict()
+        if materials:
+            bad = [m for m in materials.values() if m.lower() not in {n.lower() for n in MAT.names()} | {"aluminum", "stainless steel"}]
+            if bad:
+                raise StoreError(f"Unknown material {bad[0]}. Known: {', '.join(MAT.names())}")
+            d["materials"] = {**d.get("materials", {}), **materials}
+        if mesh_size is not None:
+            d.setdefault("mesh", {})
+            if mesh_size > 0:
+                d["mesh"]["size"] = mesh_size
+            else:
+                d["mesh"].pop("size", None)
+        if modes is not None:
+            d["modes"] = modes
+        if safety_target is not None:
+            d["safety_target"] = safety_target
+        if parts is not None:
+            d["parts"] = parts or None
+        sim.replace(p, study, d, b, current_actor.get().author)
+        return f"Updated {study}."
+
+    @tool("sim_run")
+    async def sim_run(project: ProjectId, study: StudyId, ref: ReadRef = None,
+                      wait_s: Annotated[float, Field(description="Seconds to wait for the result (0 = return at once)")] = 600) -> str:
+        """Mesh and solve a study on a compute target. Waits for the result and returns the key numbers and where the peak is."""
+        import asyncio
+        p = proj(project)
+        ref = rref(p, ref)
+        job = await sim.run(p, study, ref)
+        loop = asyncio.get_running_loop()
+        end = loop.time() + max(0.0, wait_s)
+        while job.status in ("queued", "running") and loop.time() < end:
+            await asyncio.sleep(0.25)
+        if job.status == "done":
+            return ("(cached result) " if job.cached else "") + summary_text(job.summary or {}, job.name) + f" [job {job.id} on {job.target or 'cache'}]"
+        if job.status == "failed":
+            raise StoreError(f"The study failed: {job.error}")
+        if job.status == "cancelled":
+            return f"Job {job.id} was cancelled."
+        return f"Job {job.id} is {job.status} ({job.stage}, {job.progress:.0%}). Call sim_results later."
+
+    @tool("sim_results", read_only=True)
+    async def sim_results(project: ProjectId, study: StudyId, ref: ReadRef = None) -> str:
+        """Result of a study at a version: peak stress and where, safety factor, displacement, frequencies or temperatures."""
+        p = proj(project)
+        ref = rref(p, ref)
+        st = await sim.state(p, study, ref)
+        if st["status"] == "done":
+            return summary_text(st["summary"], sim.read(p, study, ref).name)
+        if st["status"] == "problem":
+            return f"The study can't run yet: {st['problem']}"
+        if st.get("job"):
+            j = st["job"]
+            return f"Status {st['status']}: {j['stage']}" + (f" Error: {j['error']}" if j.get("error") else "")
+        return "Not run on this version yet. Use sim_run."
+
+    @tool("sim_targets", read_only=True)
+    async def sim_targets() -> str:
+        """Compute targets (this computer, remote compute nodes) with their cores, GPUs and installed solvers."""
+        out = []
+        for t in await engine.targets.describe():
+            d = t.get("devices") or {}
+            out.append({"id": t["id"], "name": t["name"], "kind": t["kind"], "online": t.get("online"),
+                        "cores": (d.get("cpu") or {}).get("performance_cores"), "gpus": [g["name"] for g in d.get("gpus", [])],
+                        "solvers": d.get("solvers")})
+        return json.dumps(out, indent=1)
 
     # ---------- resources ----------
 

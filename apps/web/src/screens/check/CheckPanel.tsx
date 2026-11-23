@@ -1,6 +1,7 @@
 import { MODE_NAMES, MODES, PROPS, STUDIES } from '../../data/seed';
 import { useApp, type AppState } from '../../state/store';
 import { cx } from '../../components/ui';
+import { EngineCheckPanel, EngineResultOverlay } from './EngineCheck';
 
 type KV = { k: string; v: string };
 
@@ -78,6 +79,11 @@ function loadPlot() {
 const PLOT = loadPlot();
 
 export function CheckPanel() {
+  const live = useApp((x) => !!x.eng);
+  return live ? <EngineCheckPanel /> : <MockCheckPanel />;
+}
+
+function MockCheckPanel() {
   const s = useApp();
   const v = studyView(s);
   const groups: { title: string; items: typeof STUDIES }[] = [];
@@ -149,6 +155,11 @@ export function CheckPanel() {
 
 /** Floating card on the 3D view with the selected study's state. */
 export function ResultOverlay() {
+  const live = useApp((x) => !!x.eng);
+  return live ? <EngineResultOverlay /> : <MockResultOverlay />;
+}
+
+function MockResultOverlay() {
   const s = useApp();
   const v = studyView(s);
   return (

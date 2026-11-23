@@ -107,7 +107,13 @@ def _tessellate(shape: Any, tolerance: float, angular: float) -> dict[str, Any]:
             nvec = None
         c = face.center()
         gt = str(face.geom_type).split(".")[-1].lower()
-        sigs.append({"type": gt, "area": float(face.area), "center": [c.X, c.Y, c.Z], "normal": nvec if gt == "plane" else None})
+        try:  # centre of mass (differs from `center` on curved faces); the mesher matches faces by it
+            from build123d import CenterOf
+            m = face.center(CenterOf.MASS)
+            com = [m.X, m.Y, m.Z]
+        except Exception:
+            com = [c.X, c.Y, c.Z]
+        sigs.append({"type": gt, "area": float(face.area), "center": [c.X, c.Y, c.Z], "normal": nvec if gt == "plane" else None, "com": com})
         if not tris:
             continue
         v = np.array([[p.X, p.Y, p.Z] for p in verts], dtype=np.float64)
