@@ -4,14 +4,17 @@
 // `job.update` events; when a job ends the studies reload so the result shows up.
 import { useApp } from '../state/store';
 import { api, EngineError } from './client';
-import type { BoundaryType, EngineJob, EngineStudy, EngineTarget, Material, SimState, StudyBoundary, StudyType } from './types';
+import type {
+  BoundaryType, DriverKind, EngineJob, EngineMate, EngineStudy, EngineTarget, Material, MateType, Mechanism, MotionSeries, MotionSetup,
+  SimState, StudyBoundary, StudyType, SweepRow,
+} from './types';
 import type { EngineEvent } from './client';
 
 const get = () => useApp.getState();
 const pid = () => get().eng?.pid ?? null;
 const P = (path = '') => `/api/projects/${encodeURIComponent(pid() ?? '')}${path}`;
 
-export const emptySim = (): SimState => ({ studies: [], jobs: {}, targets: null, materials: [], loaded: false });
+export const emptySim = (): SimState => ({ studies: [], jobs: {}, targets: null, materials: [], mates: [], loaded: false });
 
 function patchSim(patch: Partial<SimState> | ((s: SimState) => Partial<SimState>)) {
   const e = get().eng;
@@ -35,14 +38,15 @@ let seq = 0;
 export async function loadStudies() {
   if (!pid()) return;
   const n = ++seq;
-  const [studies, materials] = await Promise.all([
+  const [studies, materials, mates] = await Promise.all([
     api<EngineStudy[]>(P('/studies')),
     get().eng?.sim?.materials.length ? Promise.resolve(get().eng!.sim.materials) : api<Material[]>('/api/materials'),
+    api<EngineMate[]>(P('/mates')).catch(() => [] as EngineMate[]),
   ]);
   if (n !== seq) return;
   const jobs = { ...(get().eng?.sim?.jobs ?? {}) };
   for (const st of studies) if (st.state?.job) jobs[st.state.job.id] = st.state.job;
-  patchSim({ studies, materials, jobs, loaded: true });
+  patchSim({ studies, materials, mates, jobs, loaded: true });
   const s = get();
   if (!s.simSel || !studies.some((x) => x.id === s.simSel)) useApp.setState({ simSel: studies[0]?.id ?? null });
 }
@@ -71,6 +75,11 @@ export function onSimEvent(ev: EngineEvent): boolean {
     }
     return true;
   }
+  if (ev.type === 'job.frame') {
+    // live body poses of a running motion job
+    if (ev.project === pid()) useApp.setState({ motionLive: { study: ev.study as string, key: ev.key as string, frame: ev.frame as Record<string, number[]> } });
+    return true;
+  }
   if (ev.type === 'targets.changed') { void loadTargets(); return true; }
   return false;
 }
@@ -93,7 +102,7 @@ function replaceStudy(st: EngineStudy) {
 }
 
 export async function createStudy(type: StudyType) {
-  const names: Record<StudyType, string> = { static: 'Static stress', modal: 'Natural frequencies', thermal: 'Heat transfer' };
+  const names: Record<StudyType, string> = { static: 'Static stress', modal: 'Natural frequencies', thermal: 'Heat transfer', motion: 'Motion' };
   const taken = new Set(get().eng?.sim?.studies.map((s) => s.name));
   let name = names[type];
   for (let i = 2; taken.has(name); i++) name = `${names[type]} ${i}`;
@@ -173,6 +182,7 @@ export const BOUNDARY_TYPES: Record<StudyType, { supports: BoundaryType[]; loads
   static: { supports: ['fixed'], loads: ['force', 'pressure', 'gravity'] },
   modal: { supports: ['fixed'], loads: [] },
   thermal: { supports: ['temperature', 'convection'], loads: ['heat_flux'] },
+  motion: { supports: [], loads: [] },
 };
 
 export function boundaryValue(b: StudyBoundary): string {
@@ -196,7 +206,70 @@ export const STUDY_META: Record<StudyType, { group: string; icon: string; engine
   static: { group: 'Structural (FEM)', icon: 'FEM', engine: 'linear static' },
   modal: { group: 'Vibration', icon: 'VIB', engine: 'modal' },
   thermal: { group: 'Heat', icon: 'TH', engine: 'steady-state thermal' },
+  motion: { group: 'Rigid bodies (MuJoCo)', icon: 'MJ', engine: 'motion' },
 };
 
 /** Colour stops of the result legend (same as the .legend CSS gradient). */
 export const COLORMAP = ['#2B59C3', '#22A6B3', '#7BC043', '#F2C230', '#E2462F'];
+
+// ---------- motion: joints (mates), drivers, results, bearing-load hand-off ----------
+
+export const MATE_LABEL: Record<MateType, string> = { revolute: 'Revolute', prismatic: 'Slider', ball: 'Ball', fixed: 'Fixed' };
+export const DRIVER_LABEL: Record<DriverKind, string> = { speed: 'Speed', torque: 'Torque', position: 'Move to' };
+
+export function driverUnit(kind: DriverKind, mate: MateType | undefined) {
+  const lin = mate === 'prismatic';
+  return { speed: lin ? 'mm/s' : 'rpm', torque: lin ? 'N' : 'N·m', position: lin ? 'mm' : '°' }[kind];
+}
+
+export function springUnit(mate: MateType | undefined) {
+  return mate === 'prismatic' ? 'N/mm' : 'N·m/rad';
+}
+
+export async function addMate(m: { type: MateType; label: string; faces: { part: string; tag: string; key: string | null }[] }) {
+  try {
+    await api(P('/mates'), { body: m });
+    await loadStudies();
+    return true;
+  } catch (e) { toast(e, 'Could not add the joint: '); return false; }
+}
+
+export async function removeMate(id: string) {
+  try { await api(P(`/mates/${id}`), { method: 'DELETE' }); await loadStudies(); } catch (e) { toast(e); }
+}
+
+export async function patchMotion(id: string, motion: Partial<MotionSetup>) {
+  try { replaceStudy(await api<EngineStudy>(P(`/studies/${id}`), { method: 'PATCH', body: { motion } })); } catch (e) { toast(e); }
+}
+
+/** Use a motion study's peak bearing load as the load of a static stress study of one part, and open that study. */
+export async function useBearingLoad(sid: string, mate: string, part: string) {
+  try {
+    const st = await api<EngineStudy>(P(`/studies/${sid}/bearing-load`), { body: { mate, part } });
+    await loadStudies();
+    useApp.setState({ simSel: st.id, simPick: null, simField: null, simRange: null });
+    get().showToast(st.state?.status === 'problem' ? `Created “${st.name}”. ${st.state.problem}` : `Created “${st.name}”. Run it to check ${part}.`);
+  } catch (e) { toast(e, 'Could not make the stress study: '); }
+}
+
+const series = new Map<string, Promise<MotionSeries>>();
+/** Time series of a motion result (cached by result key; a key's files never change). */
+export function loadSeries(key: string, url: string): Promise<MotionSeries> {
+  let p = series.get(key);
+  if (!p) {
+    p = api<MotionSeries>(url);
+    p.catch(() => series.delete(key));
+    series.set(key, p);
+  }
+  return p;
+}
+
+export async function loadMechanism(sid: string): Promise<Mechanism | null> {
+  try { return await api<Mechanism>(P(`/studies/${sid}/mechanism`)); } catch (e) { toast(e, 'Preview: '); return null; }
+}
+
+export function sweepPeak(r: SweepRow, mate: string | null): number | null {
+  if (!r.ok || !r.peak_force_n) return null;
+  if (mate) return r.peak_force_n[mate] ?? null;
+  return Math.max(...Object.values(r.peak_force_n));
+}

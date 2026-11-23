@@ -33,7 +33,7 @@ jobs:
       - name: Engine tests
         working-directory: engine
         run: uv run --python 3.12 --extra dev pytest -q
-      - name: Validation (Phase 3 gate)
+      - name: Validation (Phase 3 and 4 gates)
         working-directory: engine
         run: |
           uv run --python 3.12 --extra dev python ../validation/report.py >> "$GITHUB_STEP_SUMMARY"

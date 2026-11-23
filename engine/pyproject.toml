@@ -1,7 +1,7 @@
 [project]
 name = "newcad-engine"
-version = "0.3.0"
-description = "NewCAD engine: projects in git, sandboxed build123d geometry, MCP server, BuilderBot, jobs and FEM"
+version = "0.4.0"
+description = "NewCAD engine: projects in git, sandboxed build123d geometry, MCP server, BuilderBot, jobs, FEM and motion"
 requires-python = ">=3.12,<3.14"
 dependencies = [
   "build123d>=0.13",
@@ -18,10 +18,15 @@ dependencies = [
   # simulation: Gmsh is GPL and only ever loaded in the separate pipeline process; CalculiX (ccx) is an external program
   "gmsh>=4.13",
   "meshio>=5.3",
+  # motion: MuJoCo rigid bodies (Apache-2.0), CoACD convex decomposition for contacts (MIT)
+  "mujoco>=3.3",
+  "coacd>=1.0.5",
 ]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "pytest-asyncio>=0.24"]
+# NVIDIA compute targets: motion sweeps as parallel worlds on the GPU
+cuda = ["mujoco-warp>=3.3"]
 
 [project.scripts]
 newcad-engine = "newcad_engine.cli:engine_main"

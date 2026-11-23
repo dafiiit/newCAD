@@ -11,17 +11,18 @@ import { MODEL_Y_OFFSET, type Vec3 } from '../../model/parts';
 import { useApp, type AppState } from '../../state/store';
 import { selectedStudy, studyView } from '../check/EngineCheck';
 import { ResultMesh } from '../check/ResultMesh';
+import { MotionAssembly } from '../check/MotionAssembly';
 
 const BLUE = new THREE.Color('#1D4ED8');
 const ORANGE = new THREE.Color('#D9480F');
 
-interface Loaded { geo: THREE.BufferGeometry; faceTags: string[] }
+export interface Loaded { geo: THREE.BufferGeometry; faceTags: string[] }
 
 const cache = new Map<string, Promise<Loaded>>();
 const loader = new GLTFLoader();
 
 /** Loads one part's GLB (cached by its content key; the engine never changes a key's file). */
-function loadPart(url: string, key: string): Promise<Loaded> {
+export function loadPart(url: string, key: string): Promise<Loaded> {
   let p = cache.get(key);
   if (!p) {
     p = apiBuffer(url).then((buf) => new Promise<Loaded>((resolve, reject) => {
@@ -47,7 +48,7 @@ function loadPart(url: string, key: string): Promise<Loaded> {
   return p;
 }
 
-function faceAttr(geo: THREE.BufferGeometry) {
+export function faceAttr(geo: THREE.BufferGeometry) {
   return geo.getAttribute('_face_id') ?? geo.getAttribute('_FACE_ID');
 }
 
@@ -65,17 +66,21 @@ function zebraMatcap() {
 const SUPPORT = new THREE.Color('#1D4ED8');
 const LOAD = new THREE.Color('#D9480F');
 const PICKED = new THREE.Color('#F59E0B');
+const JOINT = new THREE.Color('#15803D');
 
 /** Faces to tint on a part in the Check tab: supports blue, loads orange, faces being picked amber. */
 function faceMarks(s: AppState, part: string): Record<string, THREE.Color> {
   if (s.layer !== 'check') return {};
   const out: Record<string, THREE.Color> = {};
   const st = selectedStudy(s);
+  if (st?.type === 'motion') {
+    for (const m of s.eng?.sim?.mates ?? []) for (const f of m.faces) if (f.part === part) out[f.tag] = JOINT;
+  }
   for (const b of st?.boundaries ?? []) {
     const c = b.type === 'fixed' || b.type === 'temperature' || b.type === 'convection' ? SUPPORT : LOAD;
     for (const f of b.faces) if (f.part === part) out[f.tag] = c;
   }
-  for (const f of s.simPick?.faces ?? []) if (f.part === part) out[f.tag] = PICKED;
+  for (const f of s.simPick?.faces ?? s.matePick?.faces ?? []) if (f.part === part) out[f.tag] = PICKED;
   return out;
 }
 
@@ -84,13 +89,15 @@ export function EngineAssembly() {
   const parts = engineParts(s) ?? [];
   const v = s.layer === 'check' ? studyView(selectedStudy(s)) : null;
   const result = v?.done && !s.simPick ? v.done : null;
+  const motion = v?.st.type === 'motion' && !s.matePick;
   const bb = viewBounds(s);
   const center: Vec3 = [(bb.mn[0] + bb.mx[0]) / 2, (bb.mn[1] + bb.mx[1]) / 2, (bb.mn[2] + bb.mx[2]) / 2];
   const cg = s.analysis === 'cg' && s.layer === 'how' && s.eng?.manifest?.cg ? toView(s.eng.manifest.cg) : null;
   const rx = Math.max(40, (bb.mx[0] - bb.mn[0]) * 0.62), rz = Math.max(40, (bb.mx[2] - bb.mn[2]) * 0.75);
   return (
     <group position={[0, MODEL_Y_OFFSET, 0]}>
-      {result?.files?.['field.glb'] && result.key && result.summary
+      {motion ? <MotionAssembly st={v!.st} />
+        : result?.files?.['field.glb'] && result.key && result.summary
         ? <ResultMesh url={result.files['field.glb']} rkey={result.key} sum={result.summary} />
         : parts.filter((p) => p.ok && p.glb && p.key).map((p) => <GlbPart key={p.key} part={p} center={center} bb={bb} />)}
       {cg && (
@@ -124,7 +131,7 @@ function GlbPart({ part, center, bb }: { part: ViewPart; center: Vec3; bb: { mn:
   const tool = useApp((s) => s.tool);
   const layer = useApp((s) => s.layer);
   const explode = useApp((s) => s.explode);
-  const picking = useApp((s) => s.layer === 'check' && !!s.simPick);
+  const picking = useApp((s) => s.layer === 'check' && (!!s.simPick || !!s.matePick));
   // a string selector keeps zustand from re-rendering on every store change
   const markKey = useApp((s) => Object.entries(faceMarks(s, part.id)).map(([t, c]) => `${t}:${c.getHexString()}`).sort().join(','));
   const marks = useMemo(() => Object.fromEntries(markKey ? markKey.split(',').map((x) => {
@@ -184,11 +191,13 @@ function GlbPart({ part, center, bb }: { part: ViewPart; center: Vec3; bb: { mn:
     if (picking) {
       const fa = faceAttr(loaded.geo);
       const tag = fa && e.face ? loaded.faceTags[Math.round(fa.getX(e.face.a))] : null;
-      const pick = useApp.getState().simPick;
+      const { simPick, matePick } = useApp.getState();
+      const pick = simPick ?? matePick;
       if (!tag || !pick) return;
       const has = pick.faces.some((f) => f.part === part.id && f.tag === tag);
       const faces = has ? pick.faces.filter((f) => !(f.part === part.id && f.tag === tag)) : [...pick.faces, { part: part.id, tag, key: part.key ?? null }];
-      useApp.setState({ simPick: { ...pick, faces } });
+      if (simPick) useApp.setState({ simPick: { ...simPick, faces } });
+      else if (matePick) useApp.setState({ matePick: { ...matePick, faces } });
       return;
     }
     if (layer === 'how' && tool === 'comment') {

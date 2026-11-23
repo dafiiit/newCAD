@@ -26,13 +26,14 @@ class WorkerJob:
     stage: str = "Queued"
     error: str | None = None
     summary: dict[str, Any] | None = None
+    frame: dict[str, Any] | None = None
     created: float = field(default_factory=time.time)
     cancel: asyncio.Event = field(default_factory=asyncio.Event)
     task: asyncio.Task[None] | None = None
 
     def to_json(self) -> dict[str, Any]:
         return {"id": self.id, "status": self.status, "progress": round(self.progress, 3), "stage": self.stage,
-                "error": self.error, "summary": self.summary}
+                "error": self.error, "summary": self.summary, "frame": self.frame if self.status == "running" else None}
 
 
 class WorkerService:
@@ -78,8 +79,10 @@ class WorkerService:
                 return
             job.status, job.stage = "running", "Starting"
 
-            def progress(f: float, s: str) -> None:
+            def progress(f: float, s: str, frame: dict[str, Any] | None = None) -> None:
                 job.progress, job.stage = f, s
+                if frame:
+                    job.frame = frame
 
             try:
                 job.summary = await self.local.run(jin, jout, progress, job.cancel)

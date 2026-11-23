@@ -7,7 +7,9 @@ exists returns it at once, so re-opening a version never re-runs a solved
 study. Identical jobs that are already queued or running are joined, not
 duplicated.
 
-Events on the engine bus: {"type": "job.update", "job": {...}}.
+Events on the engine bus: {"type": "job.update", "job": {...}}, and for motion
+jobs {"type": "job.frame", "frame": {part: [x, y, z, qx, qy, qz, qw]}} with
+the body poses while it runs (a few per second).
 """
 from __future__ import annotations
 
@@ -175,9 +177,12 @@ class JobManager:
             for pid, src in job.breps.items():
                 shutil.copyfile(src, jdir / "parts" / f"{pid}.brep")
 
-            def progress(f: float, stage: str) -> None:
+            def progress(f: float, stage: str, frame: dict[str, Any] | None = None) -> None:
                 job.progress, job.stage = max(job.progress, min(f, 0.99)), stage
                 self._pub(job, force=False)
+                if frame:  # live body poses of a motion job (viewport coordinates)
+                    self.publish_event({"type": "job.frame", "project": job.project, "job": job.id, "study": job.study,
+                                        "key": job.key, "frame": frame})
 
             summary = await target.run(jdir, tmp, progress, job.cancel_event)
             dest = self.result_dir(job.key)

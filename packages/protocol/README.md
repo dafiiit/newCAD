@@ -2,7 +2,8 @@
 
 Shared shapes between the engine and the app, as JSON Schema.
 
-- `schemas/study.schema.json`: a simulation study (`studies/<id>.yaml` in a project repository).
+- `schemas/study.schema.json`: a simulation study (`studies/<id>.yaml` in a project repository), FEM or motion.
+- `schemas/mate.schema.json`: a joint between parts (an entry of `mates` in `assembly.yaml`), used by motion studies.
 
 The engine's Pydantic models are the source for now (`engine/scripts/export_schemas.py` writes these
 files and a test fails when they drift). The app's TypeScript types in `apps/web/src/engine/types.ts`

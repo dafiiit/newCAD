@@ -161,6 +161,7 @@ class StudyPatch(BaseModel):
     safety_target: float | None = None
     target: str | None = None
     parts: list[str] | None = None
+    motion: dict[str, Any] | None = None
 
 
 class FacePick(BaseModel):
@@ -176,6 +177,33 @@ class BoundaryBody(BaseModel):
     vector: list[float] | None = None
     value: float | None = None
     ambient: float | None = None
+
+
+class MateBody(BaseModel):
+    type: str = "revolute"
+    label: str = ""
+    faces: list[FacePick] = Field(default_factory=list)
+    parts: list[str] | None = None
+    origin: list[float] | None = None
+    axis: list[float] | None = None
+    limits: list[float] | None = None
+
+
+class MatePatch(BaseModel):
+    type: str | None = None
+    label: str | None = None
+    faces: list[FacePick] | None = None
+    parts: list[str] | None = None
+    origin: list[float] | None = None
+    axis: list[float] | None = None
+    limits: list[float] | None = None
+
+
+class BearingLoad(BaseModel):
+    mate: str
+    part: str
+    into: str | None = None
+    ref: str | None = None
 
 
 class Measure(BaseModel):
@@ -585,6 +613,8 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         patch = body.model_dump(exclude_unset=True)
         if "mesh" in patch and patch["mesh"] is not None:
             patch["mesh"] = {**cur.get("mesh", {}), **patch["mesh"]}
+        if "motion" in patch and patch["motion"] is not None:
+            patch["motion"] = {**(cur.get("motion") or {}), **patch["motion"]}
         st = eng.sim.replace(p, sid, {**cur, **patch}, None, YOU)
         return study_json(st, await eng.sim.state(p, sid))
 
@@ -633,6 +663,52 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         job = await eng.sim.run(proj(pid), sid, body.ref, body.priority, body.target, body.force)
         return job.to_json()
 
+    # ---------- motion: mates (joints), the mechanism for the live preview, bearing-load hand-off ----------
+
+    @app.get("/api/projects/{pid}/mates")
+    async def list_mates(pid: str, ref: str | None = None) -> list[dict[str, Any]]:
+        return await eng.mates.resolved(proj(pid), ref)
+
+    @app.post("/api/projects/{pid}/mates")
+    async def add_mate(pid: str, body: MateBody) -> dict[str, Any]:
+        p = proj(pid)
+        d = body.model_dump(exclude_none=True)
+        d["faces"] = face_refs(p, body.faces)
+        mate = eng.mates.add(p, d)
+        return mate.model_dump(mode="json")
+
+    @app.patch("/api/projects/{pid}/mates/{mid}")
+    async def patch_mate(pid: str, mid: str, body: MatePatch) -> dict[str, Any]:
+        p = proj(pid)
+        d = body.model_dump(exclude_unset=True)
+        if body.faces is not None:
+            d["faces"] = face_refs(p, body.faces)
+        return eng.mates.update(p, mid, d).model_dump(mode="json")
+
+    @app.delete("/api/projects/{pid}/mates/{mid}")
+    async def delete_mate(pid: str, mid: str) -> dict[str, Any]:
+        eng.mates.remove(proj(pid), mid)
+        return {"ok": True}
+
+    @app.get("/api/projects/{pid}/studies/{sid}/mechanism")
+    async def study_mechanism(pid: str, sid: str, ref: str | None = None) -> dict[str, Any]:
+        """Bodies (mass, centre of mass, inertia, part GLB) and joints of a motion study, for the Rapier preview."""
+        prep = await eng.sim.prepare(proj(pid), sid, ref)
+        if prep["study"].type != "motion":
+            raise HTTPException(400, "Not a motion study")
+        mech = prep["inputs"]["mechanism"]
+        for b in mech["bodies"]:
+            b["glb"] = f"/api/cache/{b['key']}/part.glb"
+        return {**mech, "key": prep["key"], "warnings": prep["inputs"]["warnings"]}
+
+    @app.post("/api/projects/{pid}/studies/{sid}/bearing-load")
+    async def study_bearing_load(pid: str, sid: str, body: BearingLoad) -> dict[str, Any]:
+        """Use a motion study's peak bearing load on a part as the load of a static stress study."""
+        from ..sim.service import bearing_load
+        p = proj(pid)
+        st = await bearing_load(eng, p, sid, body.mate, body.part, body.ref, body.into, YOU)
+        return study_json(st, await eng.sim.state(p, st.id))
+
     @app.get("/api/jobs")
     async def jobs(project: str | None = None) -> list[dict[str, Any]]:
         return [j.to_json() for j in eng.jobs.list(project)]
@@ -650,7 +726,8 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         return (await eng.jobs.retry(jid)).to_json()
 
     RESULT_TYPES = {"field.glb": "model/gltf-binary", "result.json": "application/json", "result.vtu": "application/octet-stream",
-                    "mesh.msh": "application/octet-stream"}
+                    "mesh.msh": "application/octet-stream", "motion.glb": "model/gltf-binary", "series.json": "application/json",
+                    "model.xml": "application/xml", "sweep.json": "application/json"}
 
     @app.get("/api/results/{key}/{name}")
     async def result_file(key: str, name: str) -> Response:
@@ -662,7 +739,7 @@ def create_app(engine: Engine | None = None) -> FastAPI:
             raise HTTPException(400, "Bad key") from None
         if not f.exists():
             raise HTTPException(404, "No result")
-        dl = {"filename": f"{key[:8]}-{name}"} if name in ("result.vtu", "mesh.msh") else {}
+        dl = {"filename": f"{key[:8]}-{name}"} if name in ("result.vtu", "mesh.msh", "model.xml") else {}
         return FileResponse(f, media_type=RESULT_TYPES[name], headers={"Cache-Control": "private, max-age=31536000, immutable"}, **dl)
 
     @app.get("/api/targets")
