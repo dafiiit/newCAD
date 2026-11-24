@@ -46,7 +46,7 @@ def test_api_end_to_end(tmp_path):
             for _ in range(200):
                 ev = ws.receive_json()
                 seen.add(ev["type"])
-                if ev["type"] == "bot.message" and ev["message"].get("task") == task["id"]:
+                if ev["type"] == "bot.message" and ev["message"].get("task") == task["id"] and ev["message"]["who"] == "bot":
                     break
             assert {"bot.task", "project.changed", "bot.message"} <= seen
         log = c.get(f"/api/projects/{pid}/log", headers=H).json()

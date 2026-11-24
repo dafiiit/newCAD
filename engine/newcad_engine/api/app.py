@@ -13,6 +13,8 @@ import json
 import logging
 from typing import Any
 
+import anyio
+
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
@@ -755,24 +757,30 @@ def create_app(engine: Engine | None = None) -> FastAPI:
         q = eng.events.subscribe()
 
         async def send() -> None:
-            await socket.send_text(json.dumps({"type": "hello", "version": __version__}))
-            while True:
-                ev = await q.get()
-                await socket.send_text(json.dumps(ev, default=str))
+            try:
+                await socket.send_text(json.dumps({"type": "hello", "version": __version__}))
+                while True:
+                    ev = await q.get()
+                    await socket.send_text(json.dumps(ev, default=str))
+            except (WebSocketDisconnect, RuntimeError):
+                pass
+            tg.cancel_scope.cancel()
 
         async def until_closed() -> None:
             # the client sends nothing, but reading notices a close (also the server's own at shutdown),
             # which would otherwise leave the sender waiting for events forever and the engine unable to exit
-            while (await socket.receive())["type"] != "websocket.disconnect":
+            try:
+                while (await socket.receive())["type"] != "websocket.disconnect":
+                    pass
+            except (WebSocketDisconnect, RuntimeError):
                 pass
+            tg.cancel_scope.cancel()
 
-        tasks = [asyncio.create_task(send()), asyncio.create_task(until_closed())]
         try:
-            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(send)
+                tg.start_soon(until_closed)
         finally:
-            for t in tasks:
-                t.cancel()
-            await asyncio.gather(*tasks, return_exceptions=True)
             eng.events.unsubscribe(q)
 
     app.mount("/mcp", mcp_app)
