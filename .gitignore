@@ -10,3 +10,6 @@ engine/.venv/
 __pycache__/
 *.pyc
 .pytest_cache/
+
+# pixi (CalculiX for the engine)
+.pixi/

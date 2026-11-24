@@ -420,7 +420,7 @@ export const useApp = create<Store>()((set, get) => ({
     set({ chatText: '' });
     get().userSays(text, ctx);
     if (s.layer === 'home' || s.layer === 'team' || s.layer === 'settings') {
-      later(() => get().say('Sounds good. In the full tool I would create a new project from that and open its What? page. In this prototype only Generator mount exists.'), 800);
+      later(() => get().say('I can\'t reach the engine right now, so I can\'t create the project yet. Start it with `pnpm dev:engine`; I connect by myself as soon as it is up, then send this again.'), 800);
       return;
     }
     if (s.layer === 'what') {

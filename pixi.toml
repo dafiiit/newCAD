@@ -1,0 +1,11 @@
+# Native simulation tools for the engine, from conda-forge.
+# `pixi install` (or `pnpm setup:sim`) puts them in .pixi/envs/default, where the
+# engine finds them without any PATH setup. The Python engine itself stays on uv.
+[workspace]
+name = "newcad"
+channels = ["conda-forge"]
+platforms = ["osx-arm64", "osx-64", "linux-64", "linux-aarch64", "win-64"]
+
+[dependencies]
+# CalculiX is GPL and only ever started as a separate program (ccx)
+calculix = ">=2.21"

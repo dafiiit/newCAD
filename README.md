@@ -37,7 +37,13 @@ The engine keeps everything under `~/.newcad` (override with `NEWCAD_HOME`): one
 
 Studies are files in the project: `studies/<id>.yaml` (static stress, natural frequencies, steady heat transfer). In the Check tab you add a study, click the faces that are held and loaded, and run it. The engine meshes with Gmsh, solves with CalculiX, and returns a field GLB with raw nodal values (von Mises, safety factor, displacement, temperature, mode shapes) that the viewport colours in its shader, so the legend range and the deformation scale change instantly. Results are cached by a hash of geometry and setup, so an unchanged version never re-runs.
 
-It needs CalculiX on the engine machine: `apt install calculix-ccx` on Linux, `conda install -c conda-forge calculix` on macOS (or point `NEWCAD_CCX` at a `ccx` binary). Gmsh comes from pip with the engine. Both are GPL and only ever run in a separate process (`python -m newcad_engine.sim.pipeline`).
+It needs CalculiX on the engine machine. The repository ships it through [Pixi](https://pixi.sh) (`brew install pixi`, or see pixi.sh for Linux and Windows):
+
+```sh
+pnpm setup:sim   # pixi install: CalculiX from conda-forge into .pixi/envs/default
+```
+
+The engine finds `ccx` there by itself; restart it after the first install. A `ccx` on PATH (`apt install calculix-ccx`) or `NEWCAD_CCX=/path/to/ccx` works too. Gmsh comes from pip with the engine. Both are GPL and only ever run in a separate process (`python -m newcad_engine.sim.pipeline`).
 
 Jobs go to a compute target: this computer, or a compute node started with `newcad-engine --worker` (see `compute-node/README.md`), added under Check → Compute targets. BuilderBot and external agents use the same studies through the `sim_*` MCP tools (`sim_create_study`, `sim_list_faces`, `sim_add_boundary`, `sim_run`, `sim_results`, …).
 

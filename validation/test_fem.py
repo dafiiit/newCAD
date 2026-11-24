@@ -1,13 +1,13 @@
 """Phase 3 gate: FEM results match analytic references (run in CI)."""
-import os
-import shutil
 
 import pytest
+
+from newcad_engine.sim.fem.calculix import ccx_binary
 
 from cases import cantilever, cantilever_frequency, conduction_bar, plate_with_hole
 
 pytestmark = [
-    pytest.mark.skipif(shutil.which(os.environ.get("NEWCAD_CCX") or "ccx") is None, reason="CalculiX (ccx) is not installed"),
+    pytest.mark.skipif(ccx_binary() is None, reason="CalculiX (ccx) is not installed"),
     pytest.mark.asyncio(loop_scope="session"),
 ]
 

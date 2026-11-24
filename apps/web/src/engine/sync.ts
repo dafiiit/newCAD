@@ -660,7 +660,12 @@ let started = false;
 export async function startEngineSync() {
   if (started) return;
   started = true;
-  if (!(await probe())) return; // no engine: stay on mock data
+  // The engine may still be starting (or restarting) when the page loads. Keep looking for
+  // it instead of giving up after one try, so the app never gets stuck on the mock data
+  // while an engine is running.
+  for (let delay = 500; !(await probe()); delay = Math.min(delay * 2, 5000)) {
+    await new Promise((r) => setTimeout(r, delay));
+  }
   const mock: AppActions = { ...get() };
   const state: EngineState = {
     online: true, pid: null, projects: [], manifest: null, building: false, log: null, files: {}, bot: null,
