@@ -211,6 +211,7 @@ const mapMsg = (m: EngineChatMessage): ChatMessage => {
   const interview = m.source === 'interview' || m.question !== undefined;
   return {
     who: m.who === 'you' ? 'you' : 'bot', text: m.text, ctx: m.ctx ?? null, actions: m.actions, branch: m.branch, t: m.t,
+    task: m.task, trace: m.trace, status: m.status,
     thread: m.thread ?? m.task ?? (m.group ? `g:${m.group}` : interview ? 'interview' : undefined),
     source: m.source ?? (m.group ? 'generate' : interview ? 'interview' : undefined),
   };
@@ -458,7 +459,7 @@ function engineActions(mock: AppActions): Partial<AppActions> {
       const text = s.chatText.trim();
       if (!text) return;
       // in a thread view, a message continues that conversation (and builds on its branch)
-      const thread = s.activeChat !== 'live' && !s.activeChat.startsWith('g:') && s.activeChat !== 'interview' ? s.activeChat : null;
+      const thread = !['live', 'new', 'interview'].includes(s.activeChat) && !s.activeChat.startsWith('g:') ? s.activeChat : null;
       if (s.layer === 'home' || s.layer === 'team' || s.layer === 'settings') {
         set({ chatText: '' });
         const goal = text.replace(/^new project:\s*/i, '').trim();
@@ -562,7 +563,10 @@ function onEvent(ev: EngineEvent) {
     if (ev.project !== e.pid) return;
     const m = ev.message as EngineChatMessage;
     if (m.who === 'system') return;
-    set((s) => ({ msgs: [...s.msgs, mapMsg(m)], typing: m.who === 'you' ? s.typing : false }));
+    const mm = mapMsg(m);
+    // the first message of a new conversation opens that conversation
+    set((s) => ({ msgs: [...s.msgs, mm], typing: m.who === 'you' ? s.typing : false,
+      ...(s.activeChat === 'new' && mm.who === 'you' && mm.thread ? { activeChat: mm.thread } : {}) }));
     return;
   }
   if (ev.type === 'bot.group') {
@@ -638,6 +642,10 @@ export async function exportModel(format: 'step' | 'stl') {
 
 export async function setNoteResolved(id: number, resolved: boolean) {
   try { await api(P(`/notes/${id}/state`), { body: { resolved } }); await loadNotes(); } catch (e) { fail(e); }
+}
+
+export async function stopTask(id: string) {
+  try { onTask(await api<BotTask>(`/api/bot/tasks/${id}/stop`, { method: 'POST', body: {} })); } catch (e) { fail(e); }
 }
 
 export async function stopTasks() {

@@ -13,6 +13,8 @@ import json
 import logging
 from typing import Any
 
+import anyio
+
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
 from pydantic import BaseModel, Field
@@ -863,13 +865,31 @@ def create_app(engine: Engine | None = None) -> FastAPI:
             return
         await socket.accept()
         q = eng.events.subscribe()
+
+        async def send() -> None:
+            try:
+                await socket.send_text(json.dumps({"type": "hello", "version": __version__}))
+                while True:
+                    ev = await q.get()
+                    await socket.send_text(json.dumps(ev, default=str))
+            except (WebSocketDisconnect, RuntimeError):
+                pass
+            tg.cancel_scope.cancel()
+
+        async def until_closed() -> None:
+            # the client sends nothing, but reading notices a close (also the server's own at shutdown),
+            # which would otherwise leave the sender waiting for events forever and the engine unable to exit
+            try:
+                while (await socket.receive())["type"] != "websocket.disconnect":
+                    pass
+            except (WebSocketDisconnect, RuntimeError):
+                pass
+            tg.cancel_scope.cancel()
+
         try:
-            await socket.send_text(json.dumps({"type": "hello", "version": __version__}))
-            while True:
-                ev = await q.get()
-                await socket.send_text(json.dumps(ev, default=str))
-        except (WebSocketDisconnect, RuntimeError):
-            pass
+            async with anyio.create_task_group() as tg:
+                tg.start_soon(send)
+                tg.start_soon(until_closed)
         finally:
             eng.events.unsubscribe(q)
 

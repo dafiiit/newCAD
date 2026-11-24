@@ -69,6 +69,7 @@ export const SidebarIcon = (p: P) => <Svg width={1.8} color="#111" {...p}><rect 
 export const TrashIcon = (p: P) => <Svg width={1.8} color="#111" {...p}><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13" /></Svg>;
 export const FolderIcon = (p: P) => <Svg width={1.7} {...p}><path d="M3 6.5h6l2 2h10v10H3z" strokeLinejoin="round" /></Svg>;
 export const BooksIcon = (p: P) => <Svg width={1.8} {...p}><path d="M4 5h5v14H4zM10 5h4v14h-4zM15 6l4-1 2 13-4 1z" /></Svg>;
+export const StopIcon = (p: P) => <Svg fill="currentColor" {...p}><rect x="6" y="6" width="12" height="12" rx="2" /></Svg>;
 export const CodeIcon = (p: P) => <Svg {...p}><path d="M8 7l-5 5 5 5M16 7l5 5-5 5" /></Svg>;
 
 export const PlaceholderCube = ({ size = 80, color = '#999', width = 1.4 }: P) => (

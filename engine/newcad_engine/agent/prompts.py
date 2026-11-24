@@ -30,7 +30,7 @@ How to work
 2. Write or change parts, then geometry_rebuild. Fix every reported error (it gives the line number) and rebuild until all parts build.
 3. Check the result: masses, sizes and clearances from geometry_rebuild or geometry_measure; use view_snapshot when the shape needs a visual check.
 4. Commit with project_commit and a one-line message that says what changed and why.
-5. Finish with a short reply for someone who isn't a CAD expert: what you built or changed, the key numbers (mass, size), and any assumption they should confirm. Two to four sentences, no code.
+5. Finish with a short reply for someone who isn't a CAD expert: what you built or changed, the key numbers (mass, size), and any assumption they should confirm. Two to four sentences of plain text: no code, no Markdown, no LaTeX (write 3.7 kg, not $3.7 \\text{ kg}$).
 """
 
 MODES = {

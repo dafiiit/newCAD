@@ -36,6 +36,8 @@ class AnthropicConversation(Conversation):
             "messages": self.messages,
             "cache_control": {"type": "ephemeral"},
             "output_config": {"effort": self.options.get("effort", "high")},
+            # readable summaries of the reasoning, shown to the user as the Bot's trace
+            "thinking": {"type": "adaptive", "display": "summarized"},
         }
         try:
             if self.fallbacks:
@@ -61,17 +63,18 @@ class AnthropicConversation(Conversation):
         self.messages.append({"role": "assistant", "content": resp.content})
         text = "".join(b.text for b in resp.content if getattr(b, "type", "") == "text")
         calls = [ToolCall(b.id, b.name, dict(b.input or {})) for b in resp.content if getattr(b, "type", "") == "tool_use"]
+        thinking = "\n\n".join(t for b in resp.content if getattr(b, "type", "") == "thinking" and (t := (getattr(b, "thinking", "") or "").strip()))
         u = resp.usage
         tokens_in = (u.input_tokens or 0) + (getattr(u, "cache_read_input_tokens", 0) or 0) + (getattr(u, "cache_creation_input_tokens", 0) or 0)
         if resp.stop_reason == "refusal":
             cat = getattr(getattr(resp, "stop_details", None), "category", None)
-            return Turn(text, [], "refusal", tokens_in, u.output_tokens, detail=str(cat or ""))
+            return Turn(text, [], "refusal", tokens_in, u.output_tokens, detail=str(cat or ""), thinking=thinking)
         if resp.stop_reason == "max_tokens" and not calls:
-            return Turn(text, [], "max_tokens", tokens_in, u.output_tokens)
+            return Turn(text, [], "max_tokens", tokens_in, u.output_tokens, thinking=thinking)
         if resp.stop_reason == "pause_turn":
             # server paused a long turn: send it back as is to continue
             return await self._call()
-        return Turn(text, calls, "tool" if calls else "end", tokens_in, u.output_tokens)
+        return Turn(text, calls, "tool" if calls else "end", tokens_in, u.output_tokens, thinking=thinking)
 
     async def send_user(self, text: str) -> Turn:
         self.messages.append({"role": "user", "content": text})

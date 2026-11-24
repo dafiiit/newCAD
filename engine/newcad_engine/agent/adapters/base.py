@@ -44,6 +44,7 @@ class Turn:
     input_tokens: int = 0
     output_tokens: int = 0
     detail: str = ""  # refusal category or error text
+    thinking: str = ""  # the model's reasoning, when the provider returns it (shown to the user as a trace)
 
 
 class AdapterError(Exception):
