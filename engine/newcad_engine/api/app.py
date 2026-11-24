@@ -129,6 +129,16 @@ class Comments(BaseModel):
     note_ids: list[int]
 
 
+class Feedback(BaseModel):
+    type: str = Field(default="Bug", max_length=20)
+    text: str = Field(min_length=1, max_length=20000)
+    context: dict[str, Any] | None = None
+    screenshot: bool = False
+    project: str | None = None
+    ref: str | None = None
+    image: str | None = Field(default=None, max_length=12_000_000)  # data:image/png;base64,... from the browser
+
+
 class SettingsPatch(BaseModel):
     provider: str | None = None
     model: str | None = None
@@ -528,6 +538,28 @@ def create_app(engine: Engine | None = None) -> FastAPI:
     @app.get("/api/bot/status")
     async def bot_status(project: str | None = None) -> dict[str, Any]:
         return eng.bot.status(project)
+
+    # ---------- developer feedback (saved locally, filed as a GitHub issue) ----------
+
+    @app.get("/api/feedback")
+    async def list_feedback() -> list[dict[str, Any]]:
+        return await asyncio.to_thread(eng.feedback.list)
+
+    @app.post("/api/feedback")
+    async def send_feedback(body: Feedback) -> dict[str, Any]:
+        png: bytes | None = None
+        if body.screenshot and body.image and body.image.startswith("data:image/png;base64,"):
+            import base64
+            with contextlib.suppress(ValueError):
+                png = base64.b64decode(body.image.split(",", 1)[1], validate=True)
+        if body.screenshot and png is None and body.project:
+            with contextlib.suppress(Exception):  # a broken model must not block the report
+                png, _ = await eng.geometry.snapshot(proj(body.project), body.ref, "iso", (960, 720))
+        return await eng.feedback.submit(body.type, body.text, body.context, png)
+
+    @app.post("/api/feedback/retry")
+    async def retry_feedback() -> dict[str, Any]:
+        return {"sent": await eng.feedback.retry_pending()}
 
     @app.get("/api/settings")
     async def get_settings() -> dict[str, Any]:

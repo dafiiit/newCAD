@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { assetUrl } from '../../engine/client';
+import { api, assetUrl } from '../../engine/client';
 import { applyBranch, branchFrom, compareCommit, fullId } from '../../engine/sync';
 import { LIB_CATS, LIBRARY, PROPS } from '../../data/seed';
 import { buildModel, massProps } from '../../model/parts';
@@ -218,26 +218,48 @@ export function AssemblyPicker() {
 
 const FB_TYPES = ['Bug', 'Idea', 'Question'] as const;
 
+interface FeedbackRecord { id: string; status: 'sent' | 'pending'; issue: { number: number; url: string } | null; error: string | null }
+
 export function FeedbackDialog() {
   const s = useApp();
   const [type, setType] = useState<(typeof FB_TYPES)[number]>('Bug');
   const [text, setText] = useState('');
   const [shot, setShot] = useState(true);
   const [ctx, setCtx] = useState(true);
+  const [busy, setBusy] = useState(false);
   const close = () => s.set({ feedbackOpen: false });
+  const live = !!s.eng;
+  const send = async () => {
+    if (!text.trim()) { s.showToast('Write a few words first'); return; }
+    if (!live) { s.showToast('Feedback needs the engine. Start it with pnpm dev:engine, then send again.'); return; }
+    setBusy(true);
+    const context = ctx ? {
+      project: s.projectName, projectId: s.eng?.pid ?? undefined, branch: s.eng?.log?.headBranch ?? undefined,
+      head: s.head, screen: s.layer, browser: navigator.userAgent,
+    } : undefined;
+    try {
+      const r = await api<FeedbackRecord>('/api/feedback', { body: { type, text, context, screenshot: shot, project: s.eng?.pid ?? null, ref: s.eng?.log?.headBranch ?? null } });
+      close();
+      s.showToast(r.status === 'sent' && r.issue ? `${type} filed as issue #${r.issue.number}. Thank you!` : `${type} saved on this computer. It goes to GitHub once the engine can reach it.`);
+    } catch (e) {
+      s.showToast(`Could not send feedback: ${e instanceof Error ? e.message : String(e)}`);
+    } finally {
+      setBusy(false);
+    }
+  };
   return (
     <Modal label="Send developer feedback" onClose={close} className="fbbox">
       <div className="modalhead">
-        <div style={{ marginRight: 'auto' }}><h2>Send developer feedback</h2><p>Goes straight to the NewCAD team. Thank you!</p></div>
+        <div style={{ marginRight: 'auto' }}><h2>Send developer feedback</h2><p>Filed as an issue in the NewCAD repo on GitHub. Thank you!</p></div>
         <button className="iconbtn" aria-label="Close" onClick={close}><CloseIcon size={20} color="#111" /></button>
       </div>
       <Segmented options={FB_TYPES} value={type} onChange={setType} label="Feedback type" />
       <textarea className="fbtext" aria-label="Your feedback" placeholder="What happened, or what would you like to see?" value={text} onChange={(e) => setText(e.target.value)} />
-      <button className="fbcheck" role="checkbox" aria-checked={shot} onClick={() => setShot(!shot)}><QBox on={shot} />Attach a screenshot of the current view</button>
+      <button className="fbcheck" role="checkbox" aria-checked={shot} onClick={() => setShot(!shot)}><QBox on={shot} />Attach a picture of the current model</button>
       <button className="fbcheck" role="checkbox" aria-checked={ctx} onClick={() => setCtx(!ctx)}><QBox on={ctx} />Include project and version info ({s.projectName} · {s.head})</button>
       <div className="pactions">
         <button className="pillbtn" onClick={close}>Cancel</button>
-        <button className="pillbtn dark" onClick={() => { close(); s.showToast(`${type} noted. Sending needs the feedback endpoint.`); }}>Send feedback</button>
+        <button className="pillbtn dark" disabled={busy} onClick={() => { void send(); }}>{busy ? 'Sending…' : 'Send feedback'}</button>
       </div>
     </Modal>
   );
