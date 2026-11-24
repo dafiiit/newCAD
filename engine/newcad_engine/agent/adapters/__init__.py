@@ -48,7 +48,7 @@ def make_conversation(settings: dict[str, Any], session_keys: dict[str, str], sy
         raise AdapterError(r["problem"])
     opts: dict[str, Any] = {
         "base_url": r["base_url"], "effort": settings.get("effort", "high"), "vision": settings.get("vision", True),
-        **(extra or {}),
+        "auth": settings.get("auth") or "auto", **(extra or {}),
     }
     key = session_keys.get(r["provider"])
     if key:

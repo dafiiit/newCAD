@@ -4,7 +4,7 @@ import type { ChatMessage, ChatThread } from '../../data/types';
 import { CHAT_PROJECTS, MODES } from '../../data/seed';
 import { aheadStage, ivCurrent, openKeys, useApp } from '../../state/store';
 import { partNameOf } from '../../engine/model';
-import { applyBranch, checkoutRef, stopTask, stopTasks } from '../../engine/sync';
+import { applyBranch, checkoutRef, stopTask, stopTasks, switchProfile } from '../../engine/sync';
 import { BotGlyph, ChevronRight, ChevronUp, CloseIcon, CollapseIcon, CubeIcon, ExpandIcon, ImageIcon, PlusIcon, SidebarIcon, ArrowRight, StopIcon, VideoIcon } from '../icons';
 import { cx } from '../ui';
 
@@ -115,6 +115,12 @@ export function ChatBar() {
                 <span className="botmark"><BotGlyph size={16} /></span>
                 <strong>Bot</strong>
                 <span className="ctx">{fresh ? 'New conversation' : activeThread ? activeThread.title : `${s.projectName} · ${s.layer === 'check' ? 'Check' : s.layer === 'how' ? 'How?' : 'Projects'}`}</span>
+                {live && (s.eng?.bot?.profiles?.length ?? 0) > 1 && (
+                  <select className="modelpick" aria-label="BuilderBot model" title="Which model BuilderBot uses" value={s.eng?.bot?.active_profile ?? ''}
+                    onChange={(e) => void switchProfile(e.target.value)}>
+                    {s.eng!.bot!.profiles!.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+                  </select>
+                )}
                 {!full && engThreads && engThreads.length > 0 && (
                   <button className="linkbtn" style={{ fontSize: 12 }} onClick={() => set({ chatFull: true, chatSide: true })}>{engThreads.length} conversation{engThreads.length === 1 ? '' : 's'}</button>
                 )}

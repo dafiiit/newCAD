@@ -14,6 +14,7 @@ import logging
 from typing import Any
 
 import anyio
+import httpx
 
 from fastapi import FastAPI, HTTPException, Request, WebSocket, WebSocketDisconnect
 from fastapi.responses import FileResponse, JSONResponse, Response
@@ -148,11 +149,27 @@ class SettingsPatch(BaseModel):
     max_tokens: int | None = None
     vision: bool | None = None
     build_while_interview: bool | None = None
+    auth: str | None = None
+    active_profile: str | None = None
 
 
 class SessionKey(BaseModel):
     provider: str
     key: str
+
+
+class ProfileBody(BaseModel):
+    id: str | None = None
+    name: str | None = Field(default=None, max_length=60)
+    provider: str | None = None
+    model: str | None = None
+    base_url: str | None = None
+    auth: str | None = None
+    activate: bool = False
+
+
+class ProfileKey(BaseModel):
+    key: str = Field(max_length=4000)
 
 
 class Export(BaseModel):
@@ -563,12 +580,74 @@ def create_app(engine: Engine | None = None) -> FastAPI:
 
     @app.get("/api/settings")
     async def get_settings() -> dict[str, Any]:
-        return {**eng.settings.data, "session_keys": sorted(eng.settings.session_keys)}
+        return eng.settings.public()
 
     @app.put("/api/settings")
     async def put_settings(body: SettingsPatch) -> dict[str, Any]:
-        eng.settings.update({k: v for k, v in body.model_dump().items() if v is not None})
+        try:
+            eng.settings.update({k: v for k, v in body.model_dump().items() if v is not None})
+        except StoreError as e:
+            raise HTTPException(404, str(e)) from e
         return eng.bot.status()
+
+    @app.post("/api/settings/profiles")
+    async def save_profile(body: ProfileBody) -> dict[str, Any]:
+        """Add a model profile (no id) or change one; `activate` switches BuilderBot to it."""
+        eng.settings.upsert_profile(body.model_dump())
+        return eng.bot.status()
+
+    @app.delete("/api/settings/profiles/{prof}")
+    async def delete_profile(prof: str) -> dict[str, Any]:
+        try:
+            eng.settings.delete_profile(prof)
+        except StoreError as e:
+            raise HTTPException(400, str(e)) from e
+        return eng.bot.status()
+
+    @app.post("/api/settings/profiles/{prof}/key")
+    async def profile_key(prof: str, body: ProfileKey) -> dict[str, Any]:
+        """Save a profile's API key in the OS keychain (memory only if the machine has none). Empty removes it."""
+        try:
+            saved = eng.settings.set_profile_key(prof, body.key.strip())
+        except StoreError as e:
+            raise HTTPException(404, str(e)) from e
+        return {**eng.bot.status(), "key_saved": "keychain" if saved else "memory"}
+
+    @app.get("/api/settings/profiles/{prof}/models")
+    async def profile_models(prof: str) -> dict[str, Any]:
+        """Ask the profile's endpoint which models it serves (GET <base_url>/models), to fill the model field."""
+        p = next((x for x in eng.settings.data["profiles"] if x["id"] == prof), None)
+        if p is None:
+            raise HTTPException(404, f"No model profile {prof!r}")
+        base = (p.get("base_url") or {"anthropic": "https://api.anthropic.com/v1", "openai": "https://api.openai.com/v1"}.get(p["provider"], "")).rstrip("/")
+        if not base:
+            return {"models": [], "error": "Set the endpoint URL first"}
+        if p["provider"] == "anthropic" and not base.endswith("/v1"):
+            base += "/v1"
+        key = eng.settings.keystore.get(f"profile:{prof}") or eng.settings.session_keys.get(p["provider"], "")
+        headers: dict[str, str] = {}
+        if key:
+            auth = p.get("auth") or "auto"
+            if auth == "x-api-key" or (auth == "auto" and p["provider"] == "anthropic"):
+                headers["x-api-key"] = key
+            else:
+                headers["Authorization"] = f"Bearer {key}"
+        if p["provider"] == "anthropic":
+            headers["anthropic-version"] = "2023-06-01"
+        try:
+            async with httpx.AsyncClient(timeout=10) as c:
+                r = await c.get(base + "/models", headers=headers)
+        except httpx.HTTPError as e:
+            return {"models": [], "error": f"Can't reach {base}: {type(e).__name__}"}
+        if r.status_code in (401, 403):
+            return {"models": [], "error": "The server rejected the API key" if key else "The server needs an API key"}
+        if r.status_code >= 400:
+            return {"models": [], "error": f"{base}/models answered {r.status_code}"}
+        try:
+            data = r.json().get("data") or []
+        except ValueError:
+            return {"models": [], "error": "The server's model list isn't JSON"}
+        return {"models": [m.get("id") for m in data if isinstance(m, dict) and m.get("id")]}
 
     @app.post("/api/settings/key")
     async def session_key(body: SessionKey) -> dict[str, Any]:

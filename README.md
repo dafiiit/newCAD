@@ -69,7 +69,7 @@ BuilderBot needs a language model. Pick it under Settings → BuilderBot model:
 - **OpenAI**: set `OPENAI_API_KEY`.
 - **OpenAI-compatible** (LM Studio, Ollama, MLX, vLLM): set the endpoint URL and model name in Settings; `NEWCAD_COMPAT_API_KEY` if the server wants one.
 
-A key can also be pasted in Settings; the engine keeps it in memory only. For offline UI checks, `NEWCAD_ALLOW_SCRIPTED=1` unlocks a scripted test model.
+Settings → BuilderBot model keeps several models (for example LM Studio on this computer and a server elsewhere) and switches between them; the Bot chat header has the same switcher. Each one has its own provider, endpoint, model and API key. Keys pasted there go to the OS keychain (service `newcad-engine`), never into `settings.json`; on a machine without a keychain they stay in memory until the engine stops. "List models" asks the endpoint for its `/models`. For offline UI checks, `NEWCAD_ALLOW_SCRIPTED=1` unlocks a scripted test model.
 
 ### Developer feedback
 
