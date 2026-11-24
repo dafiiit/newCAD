@@ -92,6 +92,7 @@ export function EngineSettings() {
           {(local || !!base) && <button className="pillbtn" disabled={looking} onClick={() => void lookUp()}>{looking ? 'Asking…' : 'List models'}</button>}
         </div>
       </div>
+      {active && <Limits key={active.id} ctx={active.context_window ?? 0} out={active.max_output ?? 0} />}
       <div className="srow">
         <div className="slabel"><b>Effort</b><span className="muted">Higher effort thinks longer per step: better parts, slower and more tokens.</span></div>
         <div className="sctl"><Segmented options={EFFORTS} value={(bot.effort ?? 'high') as (typeof EFFORTS)[number]} onChange={(v) => void saveBotSettings({ effort: v })} label="Effort" /></div>
@@ -123,6 +124,26 @@ export function EngineSettings() {
           </div>
         </div>
       )}
+    </>
+  );
+}
+
+/** Context window and reply length of the model in use. With a window set, the engine trims the
+ *  conversation before each call so prompt plus reply always fit (servers on a LAN can stall otherwise). */
+function Limits({ ctx, out }: { ctx: number; out: number }) {
+  const [c, setC] = useState(ctx ? String(ctx) : '');
+  const [o, setO] = useState(out ? String(out) : '');
+  const num = (v: string) => Math.max(0, Math.floor(Number(v.replace(/[^0-9]/g, '')) || 0));
+  return (
+    <>
+      <div className="srow">
+        <div className="slabel"><b>Context window</b><span className="muted">Tokens the model can hold, prompt and reply together. BuilderBot shortens older steps so a request never goes over it. Empty: no limit.</span></div>
+        <div className="sctl"><input className="stext" inputMode="numeric" aria-label="Context window" value={c} placeholder="e.g. 131072" onChange={(e) => setC(e.target.value)} onBlur={() => num(c) !== ctx && void saveBotSettings({ context_window: num(c) })} /></div>
+      </div>
+      <div className="srow">
+        <div className="slabel"><b>Longest reply</b><span className="muted">Output tokens per answer, kept free inside the window. Empty: the server's default.</span></div>
+        <div className="sctl"><input className="stext" inputMode="numeric" aria-label="Longest reply" value={o} placeholder="e.g. 32000" onChange={(e) => setO(e.target.value)} onBlur={() => num(o) !== out && void saveBotSettings({ max_output: num(o) })} /></div>
+      </div>
     </>
   );
 }

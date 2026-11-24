@@ -150,6 +150,8 @@ class SettingsPatch(BaseModel):
     vision: bool | None = None
     build_while_interview: bool | None = None
     auth: str | None = None
+    context_window: int | None = Field(default=None, ge=0, le=10_000_000)
+    max_output: int | None = Field(default=None, ge=0, le=1_000_000)
     active_profile: str | None = None
 
 
@@ -165,6 +167,8 @@ class ProfileBody(BaseModel):
     model: str | None = None
     base_url: str | None = None
     auth: str | None = None
+    context_window: int | None = Field(default=None, ge=0, le=10_000_000)
+    max_output: int | None = Field(default=None, ge=0, le=1_000_000)
     activate: bool = False
 
 
