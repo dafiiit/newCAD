@@ -157,6 +157,29 @@ async def test_reasoning_is_split_from_openai_compatible_replies():
     assert split_reasoning(NS(content="Plain")) == ("Plain", "")
 
 
+async def test_new_chats_start_clean_and_threads_survive_a_restart(engine):
+    p = engine.store.create("Threads", template="demo")
+    prompts = []
+
+    def script(text, ctx):
+        prompts.append(text)
+        if "thinner" in text and "Recent conversation" not in text:
+            yield Turn("", [call("geometry_patch_part", part="plate", find="PLATE_T = 10", replace="PLATE_T = 8")], "tool")
+        yield Turn("ok", [], "end")
+    engine.bot.script = script
+    try:
+        first = await engine.bot.wait(engine.bot.start_change(p.id, "make the plate thinner").id)
+        assert first.branch and len(first.commits) == 1 and first.commits[0]["author"] == "Bot"  # not the base commit
+        await engine.bot.wait(engine.bot.start_change(p.id, "what colour is the upright?").id)
+        assert "Recent conversation" not in prompts[-1]  # a new conversation doesn't see the other one
+        engine.bot.tasks.clear()  # as after an engine restart
+        follow = await engine.bot.wait(engine.bot.start_change(p.id, "and a bit more", thread=first.id).id)
+    finally:
+        engine.bot.script = None
+    assert "make the plate thinner" in prompts[-1] and "colour is the upright" not in prompts[-1]
+    assert follow.base == str(p.resolve(first.branch).id)  # continued on the conversation's branch
+
+
 async def test_apply_bot_branch_by_merge(engine):
     p = engine.store.create("Apply", template="demo")
     t = await engine.bot.wait(engine.bot.start_change(p.id, "make a bracket").id)

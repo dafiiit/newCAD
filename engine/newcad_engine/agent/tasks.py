@@ -144,6 +144,18 @@ class BotManager:
                 and (not thread or thread in (m.get("thread"), m.get("task")))][-n:]
         return "\n".join(f"{'User' if m['who'] == 'you' else 'Bot'}: {m['text']}" for m in msgs)
 
+    def _thread_branch(self, pid: str, thread: str) -> str | None:
+        """The branch a conversation's last task left behind: from the running engine, or after a restart
+        from the Bot replies in the chat log."""
+        p = self.engine.store.get(pid)
+        live = [x.branch for x in self.tasks.values() if x.project == pid and (x.id == thread or x.thread == thread) and x.branch]
+        logged = [m["branch"] for m in self.chat(pid) if m.get("who") == "bot" and m.get("branch")
+                  and thread in (m.get("thread"), m.get("task"))]
+        for b in live[::-1] + logged[::-1]:  # newest first; the chat log covers tasks from before a restart
+            if p.is_branch(b):
+                return b
+        return None
+
     # ---------- running a task ----------
 
     def _new_task(self, pid: str, mode: str, goal: str, branch: str, base: str, **kw: Any) -> BotTask:
@@ -201,7 +213,9 @@ class BotManager:
         t.branches = kept
         t.branch = res.branch if res.branch in kept else (kept[-1] if kept else "")
         if t.branch:
-            t.commits = [c.to_json() for c in p.log() if c.branch in kept][-10:]
+            # only the task's own commits: not the base it started from or anything before it
+            before = {str(c.id) for c in p.repo.walk(base.id)}
+            t.commits = [c.to_json() for c in p.log() if c.branch in kept and c.id not in before][-10:]
             man = await self.engine.geometry.build(p, t.branch)
             t.mass_kg, t.builds = man["mass_kg"], man["ok"]
         return res
@@ -236,11 +250,10 @@ class BotManager:
         conversation's last task produced and its messages stay in the same thread."""
         self._check_ready(pid)
         p = self.engine.store.get(pid)
-        recent = self._recent(pid, thread=thread)
+        # a new conversation starts clean; a follow-up sees only its own conversation
+        recent = self._recent(pid, thread=thread) if thread else ""
         if thread and from_ref is None:
-            prev = [x for x in self.tasks.values() if x.project == pid and (x.id == thread or x.thread == thread) and x.branch]
-            if prev and p.is_branch(prev[-1].branch):
-                from_ref = prev[-1].branch
+            from_ref = self._thread_branch(pid, thread)
         b, base = self._bot_branch(pid, f"bot/{slugify(message, 'change')[:24]}", from_ref)
         t = self._new_task(pid, "change", message, b, base, thread=thread)
         self.say(pid, "you", message, ctx=selected, task=t.id, source="chat", thread=thread)
@@ -262,8 +275,12 @@ class BotManager:
         # a follow-up on a comment continues its conversation and builds on its branch
         ids = [n["id"] for n in chosen]
         prev = [x for x in self.tasks.values() if x.project == pid and x.mode == "comment" and set(x.notes) & set(ids)]
-        thread = (prev[0].thread or prev[0].id) if prev else None
-        from_ref = prev[-1].branch if prev and prev[-1].branch and p.is_branch(prev[-1].branch) else None
+        if prev:
+            thread = prev[0].thread or prev[0].id
+        else:  # after a restart, find the comment's conversation in the chat log
+            said = [m for m in self.chat(pid) if m.get("source") == "comment" and m.get("note") in ids and (m.get("thread") or m.get("task"))]
+            thread = (said[0].get("thread") or said[0].get("task")) if said else None
+        from_ref = self._thread_branch(pid, thread) if thread else None
         b, base = self._bot_branch(pid, f"bot/comment-{chosen[0]['id']}", from_ref)
         t = self._new_task(pid, "comment", f"Comment {', '.join('#' + str(n['id']) for n in chosen)}", b, base, thread=thread, notes=ids)
         for n in chosen:
