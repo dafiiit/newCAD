@@ -609,6 +609,7 @@ select{height:36px;border:1.5px solid #111;border-radius:10px;padding:0 10px;fon
 .fbcheck{display:flex;align-items:center;gap:10px;border:0;background:transparent;cursor:pointer;font-size:14px;padding:0;text-align:left}
 .fbcheck .qbox{color:#111}
 .fbbox .pactions{justify-content:flex-end}
+.fbshot{display:block;width:100%;max-height:180px;object-fit:contain;object-position:center;border:1px solid #ddd;border-radius:10px;background:#f6f6f4}
 .resbtn{height:30px;padding:0 10px;border:1.5px solid #111;border-radius:999px;background:#fff;display:inline-flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;flex:none}
 
 .resbtn.done{background:#E8F5EC;border-color:#15803D;color:#15803D}

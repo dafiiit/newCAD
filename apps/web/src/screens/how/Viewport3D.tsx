@@ -125,7 +125,7 @@ export function Viewport3D() {
   return (
     <div className="viewport">
       <div className="stage3d truecol" role="img" aria-label="3D view of the selected concept. Drag to orbit, scroll to zoom.">
-        <Canvas gl={{ antialias: true, localClippingEnabled: true }} dpr={[1, 2]} onPointerMissed={() => useApp.setState({ selected: null })}>
+        <Canvas gl={{ antialias: true, localClippingEnabled: true, preserveDrawingBuffer: true /* lets the feedback dialog screenshot the 3D view */ }} dpr={[1, 2]} onPointerMissed={() => useApp.setState({ selected: null })}>
           <color attach="background" args={['#ffffff']} />
           <CameraRig orbit={Number(settings.orbit)} />
           <ambientLight intensity={1.6} />
