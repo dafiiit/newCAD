@@ -88,7 +88,7 @@ class EventBus:
             loop.call_soon_threadsafe(push)
 
 
-PROFILE_FIELDS = ("provider", "model", "base_url", "auth")
+PROFILE_FIELDS = ("provider", "model", "base_url", "auth", "context_window", "max_output")
 
 
 def _guess_profile_name(d: dict[str, Any]) -> str:
@@ -113,6 +113,8 @@ class Settings:
         "model": "",
         "base_url": "",
         "auth": "auto",  # how the key is sent: auto (provider default), bearer, x-api-key
+        "context_window": 0,  # tokens the model can hold (prompt + reply); 0 = unknown, no trimming
+        "max_output": 0,  # longest reply in tokens; 0 = provider default
         "effort": "high",
         "max_steps": 40,
         "max_tokens": 600_000,
@@ -171,7 +173,8 @@ class Settings:
             pid, n = base, 2
             while any(p["id"] == pid for p in self.data["profiles"]):
                 pid, n = f"{base}-{n}", n + 1
-            cur = {"id": pid, "name": prof.get("name") or "Model", "provider": "openai-compatible", "model": "", "base_url": "", "auth": "auto"}
+            cur = {"id": pid, "name": prof.get("name") or "Model", "provider": "openai-compatible", "model": "", "base_url": "", "auth": "auto",
+                   "context_window": 0, "max_output": 0}
             self.data["profiles"].append(cur)
         for k in ("name", *PROFILE_FIELDS):
             if prof.get(k) is not None:

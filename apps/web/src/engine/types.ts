@@ -145,7 +145,7 @@ export interface BotTask {
 export interface BotGroup { id: string; project: string; status: 'running' | 'done' | 'failed'; tasks: BotTask[] }
 
 export interface ProviderInfo { id: string; label: string; defaultModel: string; keyEnv: string }
-export interface ModelProfile { id: string; name: string; provider: string; model: string; base_url: string; auth: 'auto' | 'bearer' | 'x-api-key'; has_key?: boolean }
+export interface ModelProfile { id: string; name: string; provider: string; model: string; base_url: string; auth: 'auto' | 'bearer' | 'x-api-key'; context_window?: number; max_output?: number; has_key?: boolean }
 export interface BotStatus {
   provider: string;
   profiles?: ModelProfile[];

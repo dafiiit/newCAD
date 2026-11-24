@@ -34,7 +34,7 @@ class AnthropicConversation(Conversation):
     async def _call(self) -> Turn:
         params: dict[str, Any] = {
             "model": self.model,
-            "max_tokens": int(self.options.get("max_output_tokens", 16000)),
+            "max_tokens": int(self.options.get("max_output") or self.options.get("max_output_tokens", 16000)),
             "system": self.system,
             "tools": self.api_tools,
             "messages": self.messages,

@@ -8,6 +8,7 @@ from typing import Any
 
 import openai
 
+from . import fit as F
 from .base import AdapterError, Conversation, ToolCall, ToolOutput, ToolSpec, Turn
 
 DEFAULT_MODEL = "gpt-5"
@@ -28,10 +29,24 @@ class OpenAIConversation(Conversation):
         self.client = options.get("client") or openai.AsyncOpenAI(**kw)
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
         self.api_tools = [{"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.schema}} for t in tools]
+        self.context_window = int(options.get("context_window") or 0)
+        self.max_output = int(options.get("max_output") or 0)
+        self.scale = 1.0  # estimate -> real prompt tokens, learned from the server's usage numbers
 
     async def _call(self) -> Turn:
+        params: dict[str, Any] = {"model": self.model, "messages": self.messages, "tools": self.api_tools}
+        if self.max_output:
+            # the official API wants max_completion_tokens; compatible servers know max_tokens
+            params["max_tokens" if self.options.get("base_url") else "max_completion_tokens"] = self.max_output
+        sent_estimate = 0
+        if self.context_window:
+            budget = F.prompt_budget(self.context_window, self.max_output)
+            if not F.fit(self.messages, self.api_tools, budget, self.scale):
+                raise AdapterError(f"This task no longer fits the model's context window ({self.context_window:,} tokens), even after trimming. "
+                                   "Start a new chat or pick a model with a larger window.")
+            sent_estimate = F.estimate(self.messages, self.api_tools)
         try:
-            resp = await self.client.chat.completions.create(model=self.model, messages=self.messages, tools=self.api_tools)
+            resp = await self.client.chat.completions.create(**params)
         except openai.AuthenticationError as e:
             raise AdapterError("The model provider rejected the API key.") from e
         except openai.NotFoundError as e:
@@ -61,6 +76,9 @@ class OpenAIConversation(Conversation):
         self.messages.append(entry)
         u = resp.usage
         tin, tout = (u.prompt_tokens, u.completion_tokens) if u else (0, 0)
+        if sent_estimate and tin:
+            # never trust the estimate to be high; learn when it was low
+            self.scale = max(1.0, min(3.0, tin / sent_estimate))
         text, thinking = split_reasoning(msg)
         if choice.finish_reason == "content_filter":
             return Turn(text, [], "refusal", tin, tout, detail="content_filter", thinking=thinking)
