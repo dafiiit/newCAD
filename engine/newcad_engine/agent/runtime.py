@@ -12,6 +12,7 @@ Guard rails enforced here and in the server:
 """
 from __future__ import annotations
 
+import asyncio
 import base64
 import json
 import logging
@@ -104,14 +105,18 @@ async def run_loop(engine: "Engine", *, project: str, branch: str, task_id: str,
                    prompt: str, allowed: set[str] | None = None, local_tools: dict[str, tuple[ToolSpec, LocalTool]] | None = None,
                    max_steps: int = 40, max_tokens: int = 600_000,
                    on_step: Callable[[str, int], None] | None = None, on_text: Callable[[str], None] | None = None,
-                   should_stop: Callable[[], bool] | None = None) -> LoopResult:
+                   should_stop: Callable[[], bool] | None = None, stop_event: asyncio.Event | None = None,
+                   trace: list[dict[str, Any]] | None = None, on_trace: Callable[[], None] | None = None) -> LoopResult:
+    """`trace` collects what the user can watch live: the model's reasoning, its text between tool calls and
+    each tool call with its result. `stop_event` stops the task at once, also in the middle of a model call."""
     local_tools = local_tools or {}
     actor = bot_actor(project, branch, task_id)
     token = current_actor.set(actor)
     calls_log: list[dict[str, Any]] = []
     try:
+        tr = Trace(trace if trace is not None else [], on_trace)
         res = await _loop(engine, actor, project, conv_factory, prompt, allowed, local_tools, max_steps, max_tokens,
-                          on_step, on_text, should_stop, calls_log)
+                          on_step, on_text, should_stop, calls_log, stop_event, tr)
         res.branch, res.branches = actor.branch or branch, list(actor.owned)
         return res
     finally:
@@ -121,8 +126,11 @@ async def run_loop(engine: "Engine", *, project: str, branch: str, task_id: str,
 async def _loop(engine: "Engine", actor: Any, project: str, conv_factory: Callable[[list[ToolSpec]], Conversation], prompt: str,
                 allowed: set[str] | None, local_tools: dict[str, tuple[ToolSpec, LocalTool]], max_steps: int, max_tokens: int,
                 on_step: Callable[[str, int], None] | None, on_text: Callable[[str], None] | None,
-                should_stop: Callable[[], bool] | None, calls_log: list[dict[str, Any]]) -> LoopResult:
+                should_stop: Callable[[], bool] | None, calls_log: list[dict[str, Any]],
+                stop_event: asyncio.Event | None = None, tr: "Trace | None" = None) -> LoopResult:
+    tr = tr or Trace([], None)
     steps = tokens = 0
+    stopped = lambda: LoopResult("stopped", "", steps, tokens, calls_log, "Stopped by you")  # noqa: E731
     async with Client(engine.mcp) as client:
         listed = (await client.list_tools()).tools
         mcp_tools = {t.name: t for t in listed if t.name not in HIDDEN_TOOLS and (allowed is None or t.name in allowed)}
@@ -130,7 +138,9 @@ async def _loop(engine: "Engine", actor: Any, project: str, conv_factory: Callab
         specs = [to_spec(t) for t in mcp_tools.values()] + [s for s, _ in local_tools.values()]
         try:
             conv = conv_factory(specs)
-            turn = await conv.send_user(prompt)
+            turn = await _until_stopped(conv.send_user(prompt), stop_event)
+        except _Stopped:
+            return stopped()
         except AdapterError as e:
             return LoopResult("failed", "", 0, 0, calls_log, str(e))
         except Exception as e:  # noqa: BLE001
@@ -139,15 +149,19 @@ async def _loop(engine: "Engine", actor: Any, project: str, conv_factory: Callab
         while True:
             steps += 1
             tokens += turn.input_tokens + turn.output_tokens
-            if turn.text.strip() and on_text and turn.calls:
-                on_text(turn.text.strip())
+            if turn.thinking.strip():
+                tr.add({"kind": "thinking", "text": turn.thinking.strip()[:TRACE_TEXT]})
+            if turn.text.strip() and turn.calls:
+                tr.add({"kind": "text", "text": turn.text.strip()[:TRACE_TEXT]})
+                if on_text:
+                    on_text(turn.text.strip())
             if turn.stop == "refusal":
                 return LoopResult("failed", turn.text, steps, tokens, calls_log, "The model declined this request" + (f" ({turn.detail})" if turn.detail else ""))
             if turn.stop == "max_tokens":
                 return LoopResult("failed", turn.text, steps, tokens, calls_log, "The model's reply was cut off (output limit)")
             if not turn.calls:
                 return LoopResult("done", turn.text.strip(), steps, tokens, calls_log)
-            if should_stop and should_stop():
+            if (should_stop and should_stop()) or (stop_event and stop_event.is_set()):
                 return LoopResult("stopped", turn.text, steps, tokens, calls_log, "Stopped by you")
             if steps >= max_steps:
                 return LoopResult("stopped", turn.text, steps, tokens, calls_log, f"Stopped after {max_steps} steps (step budget)")
@@ -155,15 +169,23 @@ async def _loop(engine: "Engine", actor: Any, project: str, conv_factory: Callab
                 return LoopResult("stopped", turn.text, steps, tokens, calls_log, f"Stopped after {tokens:,} tokens (token budget)")
             outputs: list[ToolOutput] = []
             for call in turn.calls:
+                if stop_event and stop_event.is_set():
+                    return stopped()
+                label = label_for(call)
                 if on_step:
-                    on_step(label_for(call), steps)
+                    on_step(label, steps)
+                ev = tr.add({"kind": "tool", "tool": call.name, "label": label, "args": _short(call.args), "status": "running"})
                 t0 = time.perf_counter()
                 out = await _execute(client, call, project, actor.branch, mcp_tools, injected_branch, local_tools)
-                calls_log.append({"tool": call.name, "args": _short(call.args), "ok": not out.is_error,
-                                  "ms": round((time.perf_counter() - t0) * 1000), "result": out.text[:300]})
+                ms = round((time.perf_counter() - t0) * 1000)
+                calls_log.append({"tool": call.name, "args": _short(call.args), "ok": not out.is_error, "ms": ms, "result": out.text[:300]})
+                tr.update(ev, status="error" if out.is_error else "ok", ms=ms, result=out.text[:TRACE_RESULT],
+                          images=len(out.images) or None)
                 outputs.append(out)
             try:
-                turn = await conv.send_tool_results(outputs)
+                turn = await _until_stopped(conv.send_tool_results(outputs), stop_event)
+            except _Stopped:
+                return stopped()
             except AdapterError as e:
                 return LoopResult("failed", "", steps, tokens, calls_log, str(e))
             except Exception as e:  # noqa: BLE001 - a broken provider response must not crash the engine
@@ -201,3 +223,49 @@ async def _execute(client: Client, call: ToolCall, project: str, branch: str, mc
 
 def _short(args: dict[str, Any]) -> dict[str, Any]:
     return {k: (v if not isinstance(v, str) or len(v) < 120 else v[:117] + "...") for k, v in args.items()}
+
+
+TRACE_TEXT = 4000
+TRACE_RESULT = 1200
+
+
+class Trace:
+    def __init__(self, events: list[dict[str, Any]], on_change: Callable[[], None] | None):
+        self.events, self.on_change = events, on_change
+
+    def add(self, ev: dict[str, Any]) -> dict[str, Any]:
+        ev = {"t": time.time(), **ev}
+        self.events.append(ev)
+        self._changed()
+        return ev
+
+    def update(self, ev: dict[str, Any], **kw: Any) -> None:
+        ev.update({k: v for k, v in kw.items() if v is not None})
+        self._changed()
+
+    def _changed(self) -> None:
+        if self.on_change:
+            self.on_change()
+
+
+class _Stopped(Exception):
+    pass
+
+
+async def _until_stopped(coro: Any, stop_event: asyncio.Event | None) -> Any:
+    """Await a model call, but give up on it as soon as the user presses Stop."""
+    if stop_event is None:
+        return await coro
+    if stop_event.is_set():
+        coro.close()
+        raise _Stopped
+    call = asyncio.ensure_future(coro)
+    waiter = asyncio.ensure_future(stop_event.wait())
+    try:
+        done, _ = await asyncio.wait({call, waiter}, return_when=asyncio.FIRST_COMPLETED)
+    finally:
+        waiter.cancel()
+    if call in done:
+        return call.result()
+    call.cancel()
+    raise _Stopped

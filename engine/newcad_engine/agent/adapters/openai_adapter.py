@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import base64
 import json
+import re
 from typing import Any
 
 import openai
@@ -57,11 +58,12 @@ class OpenAIConversation(Conversation):
         self.messages.append(entry)
         u = resp.usage
         tin, tout = (u.prompt_tokens, u.completion_tokens) if u else (0, 0)
+        text, thinking = split_reasoning(msg)
         if choice.finish_reason == "content_filter":
-            return Turn(msg.content or "", [], "refusal", tin, tout, detail="content_filter")
+            return Turn(text, [], "refusal", tin, tout, detail="content_filter", thinking=thinking)
         if choice.finish_reason == "length" and not calls:
-            return Turn(msg.content or "", [], "max_tokens", tin, tout)
-        return Turn(msg.content or "", calls, "tool" if calls else "end", tin, tout)
+            return Turn(text, [], "max_tokens", tin, tout, thinking=thinking)
+        return Turn(text, calls, "tool" if calls else "end", tin, tout, thinking=thinking)
 
     async def send_user(self, text: str) -> Turn:
         self.messages.append({"role": "user", "content": text})
@@ -82,3 +84,25 @@ class OpenAIConversation(Conversation):
                 content.append({"type": "image_url", "image_url": {"url": "data:image/png;base64," + base64.b64encode(img).decode()}})
             self.messages.append({"role": "user", "content": content})
         return await self._call()
+
+
+_THINK = re.compile(r"<(think|thinking|thought)>(.*?)(?:</\1>|$)", re.S | re.I)
+
+
+def split_reasoning(msg: Any) -> tuple[str, str]:
+    """Reasoning comes back as a separate field (LM Studio, vLLM, Ollama, DeepSeek: reasoning_content or
+    reasoning) or inline as <think>...</think> in the text. Returns (visible text, reasoning)."""
+    content = msg.content or ""
+    parts = []
+    for attr in ("reasoning_content", "reasoning"):
+        v = getattr(msg, attr, None)
+        if v is None and getattr(msg, "model_extra", None):
+            v = msg.model_extra.get(attr)
+        if isinstance(v, str) and v.strip():
+            parts.append(v.strip())
+            break
+    for m in _THINK.finditer(content):
+        parts.append(m.group(2).strip())
+    if parts:
+        content = _THINK.sub("", content).strip()
+    return content, "\n\n".join(p for p in parts if p)

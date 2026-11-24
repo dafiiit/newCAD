@@ -6,7 +6,7 @@ import json
 import logging
 import secrets
 import time
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field, fields
 from typing import TYPE_CHECKING, Any
 
 from ..project import spec as S
@@ -48,12 +48,28 @@ class BotTask:
     mass_kg: float | None = None
     builds: bool | None = None
     branches: list[str] = field(default_factory=list)
+    trace: list[dict[str, Any]] = field(default_factory=list)  # reasoning, text and tool calls, live
     stop_requested: bool = False
+    stop_event: asyncio.Event = field(default_factory=asyncio.Event)
 
     def to_json(self) -> dict[str, Any]:
-        d = asdict(self)
-        d.pop("stop_requested")
-        return d
+        d = {f.name: getattr(self, f.name) for f in fields(self) if f.name not in ("stop_requested", "stop_event")}
+        d["trace"] = self.trace[-TRACE_KEEP:]
+        return json.loads(json.dumps(d, default=str))
+
+    def trace_brief(self) -> list[dict[str, Any]]:
+        """A shorter copy of the trace kept with the Bot's reply in the chat log."""
+        out = []
+        for ev in self.trace[-TRACE_KEEP:]:
+            ev = dict(ev)
+            for k, n in (("text", 1500), ("result", 400)):
+                if isinstance(ev.get(k), str) and len(ev[k]) > n:
+                    ev[k] = ev[k][:n] + "…"
+            out.append(ev)
+        return out
+
+
+TRACE_KEEP = 150
 
 
 class BotManager:
@@ -128,6 +144,18 @@ class BotManager:
                 and (not thread or thread in (m.get("thread"), m.get("task")))][-n:]
         return "\n".join(f"{'User' if m['who'] == 'you' else 'Bot'}: {m['text']}" for m in msgs)
 
+    def _thread_branch(self, pid: str, thread: str) -> str | None:
+        """The branch a conversation's last task left behind: from the running engine, or after a restart
+        from the Bot replies in the chat log."""
+        p = self.engine.store.get(pid)
+        live = [x.branch for x in self.tasks.values() if x.project == pid and (x.id == thread or x.thread == thread) and x.branch]
+        logged = [m["branch"] for m in self.chat(pid) if m.get("who") == "bot" and m.get("branch")
+                  and thread in (m.get("thread"), m.get("task"))]
+        for b in live[::-1] + logged[::-1]:  # newest first; the chat log covers tasks from before a restart
+            if p.is_branch(b):
+                return b
+        return None
+
     # ---------- running a task ----------
 
     def _new_task(self, pid: str, mode: str, goal: str, branch: str, base: str, **kw: Any) -> BotTask:
@@ -163,7 +191,8 @@ class BotManager:
         res = await run_loop(self.engine, project=t.project, branch=t.branch, task_id=t.id,
                              conv_factory=self._conv_factory(t.project, system), prompt=prompt,
                              max_steps=t.max_steps, max_tokens=int(settings.get("max_tokens", 600_000)),
-                             on_step=on_step, should_stop=lambda: t.stop_requested)
+                             on_step=on_step, should_stop=lambda: t.stop_requested, stop_event=t.stop_event,
+                             trace=t.trace, on_trace=lambda: self._emit(t))
         t.calls, t.tokens, t.reply, t.problem = res.calls, res.tokens, res.text, res.problem
         t.status = res.status
         first = t.branch
@@ -184,7 +213,9 @@ class BotManager:
         t.branches = kept
         t.branch = res.branch if res.branch in kept else (kept[-1] if kept else "")
         if t.branch:
-            t.commits = [c.to_json() for c in p.log() if c.branch in kept][-10:]
+            # only the task's own commits: not the base it started from or anything before it
+            before = {str(c.id) for c in p.repo.walk(base.id)}
+            t.commits = [c.to_json() for c in p.log() if c.branch in kept and c.id not in before][-10:]
             man = await self.engine.geometry.build(p, t.branch)
             t.mass_kg, t.builds = man["mass_kg"], man["ok"]
         return res
@@ -203,7 +234,7 @@ class BotManager:
             if others:
                 text += f" I also tried {', '.join(others)}; you'll find {'them' if len(others) > 1 else 'it'} in the version history."
         self.say(t.project, "bot", text.strip() or "Done.", task=t.id, thread=t.thread, branch=t.branch or None, source="comment" if t.mode == "comment" else "chat",
-                 actions=["apply", "checkout"] if t.branch and t.commits else [])
+                 actions=["apply", "checkout"] if t.branch and t.commits else [], trace=t.trace_brief(), status=t.status)
 
     def _bot_branch(self, pid: str, name: str, from_ref: str | None = None) -> tuple[str, str]:
         p = self.engine.store.get(pid)
@@ -219,11 +250,10 @@ class BotManager:
         conversation's last task produced and its messages stay in the same thread."""
         self._check_ready(pid)
         p = self.engine.store.get(pid)
-        recent = self._recent(pid, thread=thread)
+        # a new conversation starts clean; a follow-up sees only its own conversation
+        recent = self._recent(pid, thread=thread) if thread else ""
         if thread and from_ref is None:
-            prev = [x for x in self.tasks.values() if x.project == pid and (x.id == thread or x.thread == thread) and x.branch]
-            if prev and p.is_branch(prev[-1].branch):
-                from_ref = prev[-1].branch
+            from_ref = self._thread_branch(pid, thread)
         b, base = self._bot_branch(pid, f"bot/{slugify(message, 'change')[:24]}", from_ref)
         t = self._new_task(pid, "change", message, b, base, thread=thread)
         self.say(pid, "you", message, ctx=selected, task=t.id, source="chat", thread=thread)
@@ -245,8 +275,12 @@ class BotManager:
         # a follow-up on a comment continues its conversation and builds on its branch
         ids = [n["id"] for n in chosen]
         prev = [x for x in self.tasks.values() if x.project == pid and x.mode == "comment" and set(x.notes) & set(ids)]
-        thread = (prev[0].thread or prev[0].id) if prev else None
-        from_ref = prev[-1].branch if prev and prev[-1].branch and p.is_branch(prev[-1].branch) else None
+        if prev:
+            thread = prev[0].thread or prev[0].id
+        else:  # after a restart, find the comment's conversation in the chat log
+            said = [m for m in self.chat(pid) if m.get("source") == "comment" and m.get("note") in ids and (m.get("thread") or m.get("task"))]
+            thread = (said[0].get("thread") or said[0].get("task")) if said else None
+        from_ref = self._thread_branch(pid, thread) if thread else None
         b, base = self._bot_branch(pid, f"bot/comment-{chosen[0]['id']}", from_ref)
         t = self._new_task(pid, "comment", f"Comment {', '.join('#' + str(n['id']) for n in chosen)}", b, base, thread=thread, notes=ids)
         for n in chosen:
@@ -348,7 +382,8 @@ class BotManager:
 
             res = await run_loop(self.engine, project=pid, branch=head, task_id=t.id, conv_factory=self._conv_factory(pid, system),
                                  prompt=prompt, allowed=INTERVIEW_TOOLS, local_tools={"ask_user": (spec_tool, ask_user)},
-                                 max_steps=10, max_tokens=150_000, on_step=on_step, should_stop=lambda: "question_id" in asked or t.stop_requested)
+                                 max_steps=10, max_tokens=150_000, on_step=on_step, should_stop=lambda: "question_id" in asked or t.stop_requested,
+                                 stop_event=t.stop_event, trace=t.trace, on_trace=lambda: self._emit(t))
             t.status = "failed" if res.status == "failed" and "question_id" not in asked else "done"
             t.problem, t.tokens, t.calls, t.finished = res.problem if t.status == "failed" else "", res.tokens, res.calls, time.time()
             self._emit(t)
@@ -379,6 +414,10 @@ class BotManager:
         if not t:
             raise StoreError("No such task")
         t.stop_requested = True
+        t.stop_event.set()
+        if t.status == "running":
+            t.label = "Stopping"
+            self._emit(t)
         return t
 
     def list(self, pid: str | None = None) -> list[dict[str, Any]]:
