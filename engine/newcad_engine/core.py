@@ -127,6 +127,8 @@ class Engine:
         self.geometry = GeometryService(self.cfg.cache_dir, self.cfg.exports_dir, self.pool)
         self.events = EventBus()
         self.settings = Settings(self.cfg)
+        from .feedback import FeedbackStore
+        self.feedback = FeedbackStore(self.cfg.home)
         self.store.listeners.append(self._on_store)
         from .jobs.manager import JobManager
         from .jobs.targets import LocalTarget, TargetRegistry
@@ -174,10 +176,13 @@ class Engine:
         self.events.bind(asyncio.get_running_loop())
         await self.pool.start()
         self._watch = asyncio.create_task(self._watch_refs())
+        self._feedback_retry = asyncio.create_task(self.feedback.retry_pending())  # send reports left over from offline runs
 
     async def stop(self) -> None:
         if self._watch:
             self._watch.cancel()
+        if getattr(self, "_feedback_retry", None):
+            self._feedback_retry.cancel()
         await self.bot.cancel_all()
         await self.jobs.close()
         await self.worker.close()
