@@ -17,12 +17,13 @@ export function ChatBar() {
   const selName = (s.layer === 'how' || isCheck) && s.selected ? partNameOf(s, s.selected) : undefined;
   const selPart = selName ? { name: selName } : undefined;
   const live = !!s.eng;
-  const engThreads = useMemo(() => (s.eng ? threadsOf(s.msgs) : null), [s.eng, s.msgs]);
-  const activeThread = s.activeChat === 'live' ? null : (engThreads ?? s.chats).find((c) => c.id === s.activeChat);
-  const msgs = activeThread ? activeThread.msgs : s.msgs;
+  const engThreads = useMemo(() => (s.eng ? threadsOf(s.msgs, s.eng.tasks) : null), [s.eng, s.msgs]);
+  const fresh = s.activeChat === 'new';  // engine mode: a new conversation before its first message
+  const activeThread = s.activeChat === 'live' || fresh ? null : (engThreads ?? s.chats).find((c) => c.id === s.activeChat);
+  const msgs = fresh ? [] : activeThread ? activeThread.msgs : s.msgs;
   const full = s.chatOpen && s.chatFull;
   const running: BotTask[] = s.eng
-    ? Object.values(s.eng.tasks).filter((t) => t.status === 'running' && t.project === s.eng!.pid && t.mode !== 'interview'
+    ? Object.values(s.eng.tasks).filter((t) => !fresh && t.status === 'running' && t.project === s.eng!.pid && t.mode !== 'interview'
       && (!activeThread || t.id === activeThread.id || t.thread === activeThread.id || (t.group && activeThread.id === `g:${t.group}`)))
     : [];
 
@@ -89,7 +90,7 @@ export function ChatBar() {
           <section className="chatbody" aria-label="Chat with Bot">
             {full && s.chatSide && (
               <aside className="chatside" aria-label="Your chats">
-                <button className="pillbtn dark newchat" onClick={() => set({ activeChat: 'live' })}><PlusIcon size={14} width={2.4} />New chat</button>
+                <button className="pillbtn dark newchat" onClick={() => set({ activeChat: live ? 'new' : 'live' })}><PlusIcon size={14} width={2.4} />New chat</button>
                 <input className="chatsearch" aria-label="Search chats" placeholder="Search chats" value={s.chatSearch} onChange={(e) => set({ chatSearch: e.target.value })} />
                 <div className="chatgroups">
                   {groups.map((g) => (
@@ -113,7 +114,7 @@ export function ChatBar() {
                 )}
                 <span className="botmark"><BotGlyph size={16} /></span>
                 <strong>Bot</strong>
-                <span className="ctx">{activeThread ? activeThread.title : `${s.projectName} · ${s.layer === 'check' ? 'Check' : s.layer === 'how' ? 'How?' : 'Projects'}`}</span>
+                <span className="ctx">{fresh ? 'New conversation' : activeThread ? activeThread.title : `${s.projectName} · ${s.layer === 'check' ? 'Check' : s.layer === 'how' ? 'How?' : 'Projects'}`}</span>
                 {!full && engThreads && engThreads.length > 0 && (
                   <button className="linkbtn" style={{ fontSize: 12 }} onClick={() => set({ chatFull: true, chatSide: true })}>{engThreads.length} conversation{engThreads.length === 1 ? '' : 's'}</button>
                 )}
@@ -122,6 +123,7 @@ export function ChatBar() {
                 </button>
               </div>
               <div className="msgs">
+                {fresh && !running.length && <p className="muted" style={{ fontSize: 13, alignSelf: 'center' }}>Ask Bot anything. This starts its own conversation and branch.</p>}
                 {running.map((t) => (
                   <div key={t.id} className="msg bot live" aria-live="polite">
                     <div className="liverow">
@@ -245,7 +247,7 @@ function ago(t?: number) {
 }
 
 /** Engine mode: one conversation per Bot task (chat requests, 3D comments and their follow-ups), plus prototype runs and the interview. */
-function threadsOf(msgs: ChatMessage[]): ChatThread[] {
+function threadsOf(msgs: ChatMessage[], tasks?: Record<string, BotTask>): ChatThread[] {
   const by = new Map<string, ChatMessage[]>();
   for (const m of msgs) {
     if (!m.thread) continue;
@@ -256,8 +258,9 @@ function threadsOf(msgs: ChatMessage[]): ChatThread[] {
   const out: (ChatThread & { last: number })[] = [];
   for (const [id, list] of by) {
     const first = list.find((m) => m.who === 'you') ?? list[0];
+    const goal = first.who === 'you' ? undefined : tasks?.[id]?.goal;
     const kind = KIND[first.source ?? list[0].source ?? 'chat'] ?? 'Chat';
-    const text = id === 'interview' ? 'What? interview' : first.text.replace(/\s+/g, ' ');
+    const text = id === 'interview' ? 'What? interview' : (goal ?? first.text).replace(/\s+/g, ' ');
     const title = `${kind === 'Chat' || id === 'interview' ? '' : `${kind}: `}${text.length > 60 ? `${text.slice(0, 58)}…` : text}`;
     const last = list[list.length - 1].t ?? 0;
     out.push({ id, project: 'eng', title, when: ago(last), msgs: list, last });

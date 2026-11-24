@@ -459,7 +459,7 @@ function engineActions(mock: AppActions): Partial<AppActions> {
       const text = s.chatText.trim();
       if (!text) return;
       // in a thread view, a message continues that conversation (and builds on its branch)
-      const thread = s.activeChat !== 'live' && !s.activeChat.startsWith('g:') && s.activeChat !== 'interview' ? s.activeChat : null;
+      const thread = !['live', 'new', 'interview'].includes(s.activeChat) && !s.activeChat.startsWith('g:') ? s.activeChat : null;
       if (s.layer === 'home' || s.layer === 'team' || s.layer === 'settings') {
         set({ chatText: '' });
         const goal = text.replace(/^new project:\s*/i, '').trim();
@@ -563,7 +563,10 @@ function onEvent(ev: EngineEvent) {
     if (ev.project !== e.pid) return;
     const m = ev.message as EngineChatMessage;
     if (m.who === 'system') return;
-    set((s) => ({ msgs: [...s.msgs, mapMsg(m)], typing: m.who === 'you' ? s.typing : false }));
+    const mm = mapMsg(m);
+    // the first message of a new conversation opens that conversation
+    set((s) => ({ msgs: [...s.msgs, mm], typing: m.who === 'you' ? s.typing : false,
+      ...(s.activeChat === 'new' && mm.who === 'you' && mm.thread ? { activeChat: mm.thread } : {}) }));
     return;
   }
   if (ev.type === 'bot.group') {

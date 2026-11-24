@@ -753,14 +753,26 @@ def create_app(engine: Engine | None = None) -> FastAPI:
             return
         await socket.accept()
         q = eng.events.subscribe()
-        try:
+
+        async def send() -> None:
             await socket.send_text(json.dumps({"type": "hello", "version": __version__}))
             while True:
                 ev = await q.get()
                 await socket.send_text(json.dumps(ev, default=str))
-        except (WebSocketDisconnect, RuntimeError):
-            pass
+
+        async def until_closed() -> None:
+            # the client sends nothing, but reading notices a close (also the server's own at shutdown),
+            # which would otherwise leave the sender waiting for events forever and the engine unable to exit
+            while (await socket.receive())["type"] != "websocket.disconnect":
+                pass
+
+        tasks = [asyncio.create_task(send()), asyncio.create_task(until_closed())]
+        try:
+            await asyncio.wait(tasks, return_when=asyncio.FIRST_COMPLETED)
         finally:
+            for t in tasks:
+                t.cancel()
+            await asyncio.gather(*tasks, return_exceptions=True)
             eng.events.unsubscribe(q)
 
     app.mount("/mcp", mcp_app)
