@@ -5,6 +5,7 @@ import asyncio
 import contextvars
 import json
 import logging
+import re
 import time
 from dataclasses import dataclass, field
 from typing import Any
@@ -87,21 +88,43 @@ class EventBus:
             loop.call_soon_threadsafe(push)
 
 
+PROFILE_FIELDS = ("provider", "model", "base_url", "auth")
+
+
+def _guess_profile_name(d: dict[str, Any]) -> str:
+    url = d.get("base_url") or ""
+    if ":1234" in url:
+        return "LM Studio"
+    if ":11434" in url:
+        return "Ollama"
+    return {"anthropic": "Claude", "openai": "OpenAI", "openai-compatible": "Local model", "scripted": "Scripted"}.get(d.get("provider") or "", "Model")
+
+
 class Settings:
-    """Engine-wide settings (Bot provider and model). API keys are never written here."""
+    """Engine-wide settings (Bot provider and model). API keys are never written here.
+
+    BuilderBot can keep several model profiles (for example a local LM Studio model and a model on a
+    server elsewhere) and switch between them. The top-level provider/model/base_url/auth always mirror
+    the active profile, so everything that reads them keeps working. Each profile's API key lives in
+    the OS keychain under its id (see keystore.py)."""
 
     DEFAULTS: dict[str, Any] = {
         "provider": "anthropic",
         "model": "",
         "base_url": "",
+        "auth": "auto",  # how the key is sent: auto (provider default), bearer, x-api-key
         "effort": "high",
         "max_steps": 40,
         "max_tokens": 600_000,
         "vision": True,
         "build_while_interview": True,
+        "profiles": [],
+        "active_profile": "",
     }
 
     def __init__(self, cfg: Config):
+        from .keystore import KeyStore
+
         self.cfg = cfg
         self.data = dict(self.DEFAULTS)
         if cfg.settings_file.exists():
@@ -109,13 +132,109 @@ class Settings:
                 self.data.update(json.loads(cfg.settings_file.read_text()))
             except json.JSONDecodeError:
                 pass
-        self.session_keys: dict[str, str] = {}  # keys pasted in the UI, kept in memory only
+        self.session_keys: dict[str, str] = {}  # keys pasted in the UI for a provider, kept in memory only
+        self.keystore = KeyStore()
+        self._migrate()
+
+    # ---------- profiles ----------
+
+    def _migrate(self) -> None:
+        """Settings from before profiles: turn the one configured model into the first profile."""
+        profs = [p for p in self.data.get("profiles") or [] if isinstance(p, dict) and p.get("id")]
+        self.data["profiles"] = profs
+        if not profs:
+            p = {"id": "default", "name": _guess_profile_name(self.data), **{k: self.data.get(k) or self.DEFAULTS[k] for k in PROFILE_FIELDS}}
+            profs.append(p)
+            self.data["active_profile"] = p["id"]
+        if not self.active():
+            self.data["active_profile"] = profs[0]["id"]
+        self._mirror()
+
+    def active(self) -> dict[str, Any] | None:
+        aid = self.data.get("active_profile")
+        return next((p for p in self.data["profiles"] if p["id"] == aid), None)
+
+    def _mirror(self) -> None:
+        a = self.active()
+        if a:
+            for k in PROFILE_FIELDS:
+                self.data[k] = a.get(k) if a.get(k) is not None else self.DEFAULTS[k]
+
+    def _save(self) -> None:
+        self.cfg.settings_file.write_text(json.dumps(self.data, indent=2))
+
+    def upsert_profile(self, prof: dict[str, Any]) -> dict[str, Any]:
+        pid = prof.get("id") or ""
+        cur = next((p for p in self.data["profiles"] if p["id"] == pid), None) if pid else None
+        if cur is None:
+            base = re.sub(r"[^a-z0-9]+", "-", (prof.get("name") or "model").lower()).strip("-") or "model"
+            pid, n = base, 2
+            while any(p["id"] == pid for p in self.data["profiles"]):
+                pid, n = f"{base}-{n}", n + 1
+            cur = {"id": pid, "name": prof.get("name") or "Model", "provider": "openai-compatible", "model": "", "base_url": "", "auth": "auto"}
+            self.data["profiles"].append(cur)
+        for k in ("name", *PROFILE_FIELDS):
+            if prof.get(k) is not None:
+                cur[k] = prof[k]
+        if prof.get("activate"):
+            self.data["active_profile"] = cur["id"]
+        self._mirror()
+        self._save()
+        return cur
+
+    def delete_profile(self, pid: str) -> None:
+        profs = self.data["profiles"]
+        if len(profs) <= 1:
+            raise StoreError("Keep at least one model")
+        if not any(p["id"] == pid for p in profs):
+            raise StoreError(f"No model profile {pid!r}")
+        self.data["profiles"] = [p for p in profs if p["id"] != pid]
+        self.keystore.delete(f"profile:{pid}")
+        if self.data["active_profile"] == pid:
+            self.data["active_profile"] = self.data["profiles"][0]["id"]
+        self._mirror()
+        self._save()
+
+    def set_profile_key(self, pid: str, key: str) -> bool:
+        """Returns True when the key was saved in the OS keychain, False when it is kept in memory only."""
+        if not any(p["id"] == pid for p in self.data["profiles"]):
+            raise StoreError(f"No model profile {pid!r}")
+        if not key:
+            self.keystore.delete(f"profile:{pid}")
+            return self.keystore.persistent()
+        return self.keystore.set(f"profile:{pid}", key)
+
+    def keys(self) -> dict[str, str]:
+        """Keys by provider for the adapters: the active profile's key wins over one pasted for the provider."""
+        out = dict(self.session_keys)
+        a = self.active()
+        if a:
+            k = self.keystore.get(f"profile:{a['id']}")
+            if k:
+                out[a["provider"]] = k
+        return out
+
+    def public(self) -> dict[str, Any]:
+        d = dict(self.data)
+        d["profiles"] = [{**p, "has_key": self.keystore.has(f"profile:{p['id']}")} for p in self.data["profiles"]]
+        d["session_keys"] = sorted(self.session_keys)
+        d["keychain"] = self.keystore.persistent()
+        return d
 
     def update(self, patch: dict[str, Any]) -> dict[str, Any]:
+        if patch.get("active_profile"):
+            if not any(p["id"] == patch["active_profile"] for p in self.data["profiles"]):
+                raise StoreError(f"No model profile {patch['active_profile']!r}")
+            self.data["active_profile"] = patch["active_profile"]
+            self._mirror()
+        a = self.active()
         for k, v in patch.items():
-            if k in self.DEFAULTS:
-                self.data[k] = v
-        self.cfg.settings_file.write_text(json.dumps(self.data, indent=2))
+            if k in ("profiles", "active_profile") or k not in self.DEFAULTS:
+                continue
+            self.data[k] = v
+            if a is not None and k in PROFILE_FIELDS:
+                a[k] = v
+        self._save()
         return self.data
 
 

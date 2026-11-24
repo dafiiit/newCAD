@@ -10,6 +10,7 @@ import { ivCurrent, openKeys, useApp, type AppActions, type AppState } from '../
 import { api, apiBlob, connectEvents, EngineError, probe, type EngineEvent } from './client';
 import { emptySim, loadStudies, onSimEvent, scheduleStudies } from './sim';
 import type {
+  ModelProfile,
   BotGroup, BotStatus, EngineMate, BotTask, EngineChatMessage, EngineLog, EngineNote, EngineState, Manifest, ProjectSummary, Spec,
 } from './types';
 
@@ -660,6 +661,33 @@ export async function saveBotSettings(patch: Record<string, unknown>) {
 
 export async function setSessionKey(provider: string, key: string) {
   try { const bot = await api<BotStatus>('/api/settings/key', { body: { provider, key } }); patchEng({ bot }); get().showToast('Key kept in memory until the engine stops'); } catch (e) { fail(e); }
+}
+
+/** Add a model profile (no id) or change one. `activate` switches BuilderBot to it. */
+export async function saveProfile(p: Partial<ModelProfile> & { activate?: boolean }) {
+  try { const bot = await api<BotStatus>('/api/settings/profiles', { body: p }); patchEng({ bot }); return bot; } catch (e) { fail(e); return null; }
+}
+
+export async function switchProfile(id: string) {
+  const bot = eng()?.bot;
+  const name = bot?.profiles?.find((p) => p.id === id)?.name ?? id;
+  try { const b = await api<BotStatus>('/api/settings', { method: 'PUT', body: { active_profile: id } }); patchEng({ bot: b }); get().showToast(`BuilderBot now uses ${name}`); } catch (e) { fail(e); }
+}
+
+export async function deleteProfile(id: string) {
+  try { const bot = await api<BotStatus>(`/api/settings/profiles/${encodeURIComponent(id)}`, { method: 'DELETE' }); patchEng({ bot }); } catch (e) { fail(e); }
+}
+
+export async function setProfileKey(id: string, key: string) {
+  try {
+    const r = await api<BotStatus & { key_saved: 'keychain' | 'memory' }>(`/api/settings/profiles/${encodeURIComponent(id)}/key`, { body: { key } });
+    patchEng({ bot: r });
+    get().showToast(!key ? 'Key removed' : r.key_saved === 'keychain' ? 'Key saved in your keychain' : 'No keychain on this machine: key kept in memory until the engine stops');
+  } catch (e) { fail(e); }
+}
+
+export async function listProfileModels(id: string): Promise<{ models: string[]; error?: string }> {
+  try { return await api(`/api/settings/profiles/${encodeURIComponent(id)}/models`); } catch (e) { return { models: [], error: e instanceof Error ? e.message : String(e) }; }
 }
 
 // ---------- boot ----------

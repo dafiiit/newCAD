@@ -95,11 +95,16 @@ class BotManager:
 
     def status(self, pid: str | None = None) -> dict[str, Any]:
         s = self.model_settings(pid)
-        r = adapters.resolve(s, self.engine.settings.session_keys)
+        r = adapters.resolve(s, self.engine.settings.keys())
         r["providers"] = [{"id": k, "label": v["label"], "defaultModel": v["default_model"], "keyEnv": v["key_env"]}
                           for k, v in adapters.PROVIDERS.items() if k != "scripted" or adapters.scripted_allowed()]
         r["effort"] = s.get("effort")
         r["max_steps"] = s.get("max_steps")
+        st = self.engine.settings
+        r["auth"] = s.get("auth") or "auto"
+        r["profiles"] = st.public()["profiles"]
+        r["active_profile"] = st.data.get("active_profile")
+        r["keychain"] = st.keystore.persistent()
         return r
 
     def _conv_factory(self, pid: str, system: str):
@@ -107,11 +112,11 @@ class BotManager:
         extra = {"script": self.script} if self.script else None
 
         def make(tools: list[ToolSpec]):
-            return adapters.make_conversation(settings, self.engine.settings.session_keys, system, tools, extra)
+            return adapters.make_conversation(settings, self.engine.settings.keys(), system, tools, extra)
         return make
 
     def _check_ready(self, pid: str) -> None:
-        r = adapters.resolve(self.model_settings(pid), self.engine.settings.session_keys)
+        r = adapters.resolve(self.model_settings(pid), self.engine.settings.keys())
         if not r["ready"]:
             raise StoreError(f"BuilderBot isn't set up: {r['problem']}")
 

@@ -15,6 +15,8 @@ dependencies = [
   "anthropic>=0.75",
   "openai>=2",
   "httpx>=0.27",
+  # model profile API keys go to the OS keychain
+  "keyring>=25",
   # simulation: Gmsh is GPL and only ever loaded in the separate pipeline process; CalculiX (ccx) is an external program
   "gmsh>=4.13",
   "meshio>=5.3",

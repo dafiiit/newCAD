@@ -22,6 +22,9 @@ class OpenAIConversation(Conversation):
             kw["api_key"] = options.get("api_key") or "not-needed"  # local servers usually ignore the key
         elif options.get("api_key"):
             kw["api_key"] = options["api_key"]
+        if options.get("auth") == "x-api-key" and options.get("api_key"):
+            # some gateways want the key in x-api-key instead of Authorization: Bearer
+            kw["default_headers"] = {"x-api-key": options["api_key"]}
         self.client = options.get("client") or openai.AsyncOpenAI(**kw)
         self.messages: list[dict[str, Any]] = [{"role": "system", "content": system}]
         self.api_tools = [{"type": "function", "function": {"name": t.name, "description": t.description, "parameters": t.schema}} for t in tools]

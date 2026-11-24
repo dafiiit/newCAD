@@ -17,7 +17,11 @@ class AnthropicConversation(Conversation):
         super().__init__(system, tools, model or DEFAULT_MODEL, options)
         kw: dict[str, Any] = {"max_retries": 3}
         if options.get("api_key"):
-            kw["api_key"] = options["api_key"]
+            if options.get("auth") == "bearer":  # gateways that want Authorization: Bearer instead of x-api-key
+                kw["auth_token"] = options["api_key"]
+                kw["api_key"] = None
+            else:
+                kw["api_key"] = options["api_key"]
         if options.get("base_url"):
             kw["base_url"] = options["base_url"]
         self.client = options.get("client") or anthropic.AsyncAnthropic(**kw)

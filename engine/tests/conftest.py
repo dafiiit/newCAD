@@ -5,6 +5,7 @@ import pytest
 import pytest_asyncio
 
 os.environ["NEWCAD_ALLOW_SCRIPTED"] = "1"
+os.environ["NEWCAD_KEYCHAIN"] = "0"  # never touch the real OS keychain from tests
 
 from newcad_engine.config import Config  # noqa: E402
 from newcad_engine.core import Engine  # noqa: E402

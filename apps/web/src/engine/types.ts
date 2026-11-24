@@ -145,8 +145,13 @@ export interface BotTask {
 export interface BotGroup { id: string; project: string; status: 'running' | 'done' | 'failed'; tasks: BotTask[] }
 
 export interface ProviderInfo { id: string; label: string; defaultModel: string; keyEnv: string }
+export interface ModelProfile { id: string; name: string; provider: string; model: string; base_url: string; auth: 'auto' | 'bearer' | 'x-api-key'; has_key?: boolean }
 export interface BotStatus {
   provider: string;
+  profiles?: ModelProfile[];
+  active_profile?: string;
+  keychain?: boolean;
+  auth?: string;
   model: string;
   base_url?: string;
   ready: boolean;
