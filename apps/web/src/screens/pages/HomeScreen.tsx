@@ -24,7 +24,14 @@ export function HomeScreen() {
   const s = useApp();
   const head = headCommit(s);
   const mock = (name: string) => () => s.showToast(`${name} is an example card. Only Generator mount is built in this prototype.`);
-  const newProject = () => { s.set({ chatOpen: true, chatText: 'New project: ' }); };
+  const newProject = () => {
+    s.set({ chatOpen: true, chatText: 'New project: ' });
+    // put the cursor after "New project: " so the goal can be typed right away
+    setTimeout(() => {
+      const el = document.querySelector<HTMLInputElement>('input[aria-label="Chat with Bot"]');
+      if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); }
+    }, 0);
+  };
   const live = s.eng?.projects;
   const projects = live ? live.slice().sort((a, b) => b.updated - a.updated).map((p) => ({
     name: p.name,

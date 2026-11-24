@@ -3,10 +3,10 @@ import json
 
 import httpx
 import numpy as np
-import os
-import shutil
 
 import pytest
+
+from newcad_engine.sim.fem.calculix import ccx_binary
 from mcp import Client
 
 from newcad_engine.api.app import create_app
@@ -19,7 +19,7 @@ from newcad_engine.results.fields import read_field_glb
 from newcad_engine.sim import study as St
 
 pytestmark = [
-    pytest.mark.skipif(shutil.which(os.environ.get("NEWCAD_CCX") or "ccx") is None, reason="CalculiX (ccx) is not installed"),
+    pytest.mark.skipif(ccx_binary() is None, reason="CalculiX (ccx) is not installed"),
     pytest.mark.asyncio(loop_scope="module"),
 ]
 

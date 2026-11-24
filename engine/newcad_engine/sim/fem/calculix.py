@@ -30,10 +30,30 @@ class SolverError(Exception):
     pass
 
 
+def _pixi_bins() -> list[Path]:
+    """bin folders of the repository's Pixi environment (`pixi install` at the repo root), if any."""
+    roots = [Path(p) for p in (os.environ.get("NEWCAD_PIXI_ENV"),) if p]
+    here = Path(__file__).resolve()
+    roots += [parent / ".pixi" / "envs" / "default" for parent in here.parents[3:6]]
+    out: list[Path] = []
+    for r in roots:
+        for sub in ("bin", "Library/bin"):  # Library/bin on Windows
+            if (r / sub).is_dir():
+                out.append(r / sub)
+    return out
+
+
 def ccx_binary() -> str | None:
-    for name in (os.environ.get("NEWCAD_CCX"), "ccx", "ccx_2.22", "ccx_2.21", "ccx_2.20"):
-        if name and shutil.which(name):
-            return shutil.which(name)
+    """NEWCAD_CCX, then the repository's Pixi environment, then PATH."""
+    names = ("ccx", "ccx_2.24", "ccx_2.23", "ccx_2.22", "ccx_2.21", "ccx_2.20")
+    env = os.environ.get("NEWCAD_CCX")
+    if env and shutil.which(env):
+        return shutil.which(env)
+    pixi_path = os.pathsep.join(str(b) for b in _pixi_bins())
+    for path in ([pixi_path] if pixi_path else []) + [None]:
+        for name in names:
+            if found := shutil.which(name, path=path):
+                return found
     return None
 
 

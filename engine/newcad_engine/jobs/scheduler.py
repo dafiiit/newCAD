@@ -88,7 +88,8 @@ def choose(kind: str, targets: list[dict[str, Any]], busy: dict[str, int], pinne
         able.append(t)
     if not able:
         why = "; ".join(reasons) or (f"no target named {pinned}" if pinned and pinned != "auto" else "no compute target")
-        return Choice(None, f"No compute target can run this: {why}")
+        hint = " (run `pnpm setup:sim` in the newCAD folder, then restart the engine)" if "has no CalculiX" in why else ""
+        return Choice(None, f"No compute target can run this: {why}{hint}")
     free = [t for t in able if busy.get(t["id"], 0) < int(t.get("slots", 1))]
     if not free:
         return Choice(None, "Waiting for a free compute target", [t["id"] for t in able])

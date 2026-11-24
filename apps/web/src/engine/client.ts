@@ -73,7 +73,7 @@ export async function apiBlob(path: string, body: unknown): Promise<{ blob: Blob
 export async function probe(): Promise<boolean> {
   try {
     const ctl = new AbortController();
-    const t = setTimeout(() => ctl.abort(), 1500);
+    const t = setTimeout(() => ctl.abort(), 4000);
     const h = await api<{ ok: boolean; name: string }>('/api/health', { signal: ctl.signal });
     clearTimeout(t);
     if (!h?.ok || h.name !== 'newcad-engine') return false;
