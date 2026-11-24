@@ -218,6 +218,23 @@ export function AssemblyPicker() {
 
 const FB_TYPES = ['Bug', 'Idea', 'Question'] as const;
 
+/** PNG data URL of the app window, leaving out open dialogs. null when the capture fails. */
+async function captureApp(): Promise<string | null> {
+  const root = document.querySelector<HTMLElement>('.app') ?? document.body;
+  try {
+    await new Promise((r) => requestAnimationFrame(() => r(null)));
+    const { domToPng } = await import('modern-screenshot');
+    // keeps CSS filters, so dark mode (an invert filter on .app) comes out as seen
+    return await domToPng(root, {
+      scale: Math.min(window.devicePixelRatio || 1, 2),
+      filter: (n) => !(n instanceof HTMLElement && n.classList.contains('modal')),
+    });
+  } catch (e) {
+    console.warn('feedback screenshot failed', e);
+    return null;
+  }
+}
+
 interface FeedbackRecord { id: string; status: 'sent' | 'pending'; issue: { number: number; url: string } | null; error: string | null }
 
 export function FeedbackDialog() {
@@ -227,8 +244,16 @@ export function FeedbackDialog() {
   const [shot, setShot] = useState(true);
   const [ctx, setCtx] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [image, setImage] = useState<string | null>(null);
+  const [capturing, setCapturing] = useState(true);
   const close = () => s.set({ feedbackOpen: false });
   const live = !!s.eng;
+  // Screenshot of the app as it was when the dialog opened (UI and 3D view, without this dialog).
+  useEffect(() => {
+    let off = false;
+    void captureApp().then((url) => { if (!off) { setImage(url); setCapturing(false); } });
+    return () => { off = true; };
+  }, []);
   const send = async () => {
     if (!text.trim()) { s.showToast('Write a few words first'); return; }
     if (!live) { s.showToast('Feedback needs the engine. Start it with pnpm dev:engine, then send again.'); return; }
@@ -238,7 +263,7 @@ export function FeedbackDialog() {
       head: s.head, screen: s.layer, browser: navigator.userAgent,
     } : undefined;
     try {
-      const r = await api<FeedbackRecord>('/api/feedback', { body: { type, text, context, screenshot: shot, project: s.eng?.pid ?? null, ref: s.eng?.log?.headBranch ?? null } });
+      const r = await api<FeedbackRecord>('/api/feedback', { body: { type, text, context, screenshot: shot, image: shot ? image : null, project: s.eng?.pid ?? null, ref: s.eng?.log?.headBranch ?? null } });
       close();
       s.showToast(r.status === 'sent' && r.issue ? `${type} filed as issue #${r.issue.number}. Thank you!` : `${type} saved on this computer. It goes to GitHub once the engine can reach it.`);
     } catch (e) {
@@ -255,7 +280,8 @@ export function FeedbackDialog() {
       </div>
       <Segmented options={FB_TYPES} value={type} onChange={setType} label="Feedback type" />
       <textarea className="fbtext" aria-label="Your feedback" placeholder="What happened, or what would you like to see?" value={text} onChange={(e) => setText(e.target.value)} />
-      <button className="fbcheck" role="checkbox" aria-checked={shot} onClick={() => setShot(!shot)}><QBox on={shot} />Attach a picture of the current model</button>
+      <button className="fbcheck" role="checkbox" aria-checked={shot} onClick={() => setShot(!shot)}><QBox on={shot} />Attach a screenshot of the current view{capturing ? ' (taking it…)' : image ? '' : ' (model only, the screen capture failed)'}</button>
+      {shot && image && <img className="fbshot" src={image} alt="Screenshot that will be attached" />}
       <button className="fbcheck" role="checkbox" aria-checked={ctx} onClick={() => setCtx(!ctx)}><QBox on={ctx} />Include project and version info ({s.projectName} · {s.head})</button>
       <div className="pactions">
         <button className="pillbtn" onClick={close}>Cancel</button>

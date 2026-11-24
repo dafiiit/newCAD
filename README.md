@@ -73,7 +73,7 @@ A key can also be pasted in Settings; the engine keeps it in memory only. For of
 
 ### Developer feedback
 
-"Send developer feedback" (menu on the What? and How? screens) goes through the engine, which saves every report in `~/.newcad/feedback/<id>.json` first and then files it as a GitHub issue in `dafiiit/newCAD` with the labels `feedback` and `feedback:bug` / `feedback:idea` / `feedback:question`. An attached model picture is committed to the `feedback-assets` branch and linked from the issue. The token comes from `NEWCAD_GITHUB_TOKEN`, `GITHUB_TOKEN` or the GitHub CLI login (`gh auth login`); `NEWCAD_FEEDBACK_REPO` points it at another repo. Reports that could not be sent stay `pending` and are retried on the next report and at engine start (`POST /api/feedback/retry` retries now).
+"Send developer feedback" (menu on the What? and How? screens) goes through the engine, which saves every report in `~/.newcad/feedback/<id>.json` first and then files it as a GitHub issue in `dafiiit/newCAD` with the labels `feedback` and `feedback:bug` / `feedback:idea` / `feedback:question`. The dialog screenshots the app window (UI and 3D view, without the dialog) when it opens; the picture is committed to the `feedback-assets` branch and linked from the issue. If the capture fails, the engine attaches a render of the model instead. The token comes from `NEWCAD_GITHUB_TOKEN`, `GITHUB_TOKEN` or the GitHub CLI login (`gh auth login`); `NEWCAD_FEEDBACK_REPO` points it at another repo. Reports that could not be sent stay `pending` and are retried on the next report and at engine start (`POST /api/feedback/retry` retries now).
 
 To work through feedback: open issues with the `feedback` label, fix one, and close it from the PR (`Fixes #N`).
 
